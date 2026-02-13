@@ -83,6 +83,8 @@ func (d *DB) ensureSchema() error {
 			name TEXT,
 			owner_jid TEXT,
 			created_ts INTEGER,
+			is_parent BOOLEAN NOT NULL DEFAULT 0,
+			linked_parent_jid TEXT,
 			updated_at INTEGER NOT NULL
 		);
 
@@ -145,6 +147,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureGroupColumns(); err != nil {
+		return err
+	}
+
 	if err := d.ensureMessagesFTS(); err != nil {
 		return err
 	}
@@ -162,6 +168,23 @@ func (d *DB) ensureMessageColumns() error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN display_text TEXT`); err != nil {
 		return fmt.Errorf("add display_text column: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureGroupColumns() error {
+	ok, err := d.tableHasColumn("groups", "is_parent")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE groups ADD COLUMN is_parent BOOLEAN NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add is_parent column: %w", err)
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE groups ADD COLUMN linked_parent_jid TEXT`); err != nil {
+		return fmt.Errorf("add linked_parent_jid column: %w", err)
 	}
 	return nil
 }
@@ -294,11 +317,13 @@ type Chat struct {
 }
 
 type Group struct {
-	JID       string
-	Name      string
-	OwnerJID  string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	JID              string
+	Name             string
+	OwnerJID         string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	IsParent         bool
+	LinkedParentJID  string
 }
 
 type GroupParticipant struct {
@@ -926,17 +951,19 @@ func (d *DB) UpsertContact(jid, phone, pushName, fullName, firstName, businessNa
 	return err
 }
 
-func (d *DB) UpsertGroup(jid, name, ownerJID string, created time.Time) error {
+func (d *DB) UpsertGroup(jid, name, ownerJID string, created time.Time, isParent bool, linkedParentJID string) error {
 	now := time.Now().UTC().Unix()
 	_, err := d.sql.Exec(`
-		INSERT INTO groups(jid, name, owner_jid, created_ts, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO groups(jid, name, owner_jid, created_ts, is_parent, linked_parent_jid, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(jid) DO UPDATE SET
 			name=COALESCE(NULLIF(excluded.name,''), groups.name),
 			owner_jid=COALESCE(NULLIF(excluded.owner_jid,''), groups.owner_jid),
 			created_ts=COALESCE(NULLIF(excluded.created_ts,0), groups.created_ts),
+			is_parent=excluded.is_parent,
+			linked_parent_jid=COALESCE(NULLIF(excluded.linked_parent_jid,''), groups.linked_parent_jid),
 			updated_at=excluded.updated_at
-	`, jid, name, ownerJID, unix(created), now)
+	`, jid, name, ownerJID, unix(created), isParent, linkedParentJID, now)
 	return err
 }
 
@@ -976,7 +1003,7 @@ func (d *DB) ListGroups(query string, limit int) ([]Group, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	q := `SELECT jid, COALESCE(name,''), COALESCE(owner_jid,''), COALESCE(created_ts,0), updated_at FROM groups WHERE 1=1`
+	q := `SELECT jid, COALESCE(name,''), COALESCE(owner_jid,''), COALESCE(created_ts,0), updated_at, COALESCE(is_parent,0), COALESCE(linked_parent_jid,'') FROM groups WHERE 1=1`
 	var args []interface{}
 	if strings.TrimSpace(query) != "" {
 		needle := "%" + query + "%"
@@ -994,7 +1021,7 @@ func (d *DB) ListGroups(query string, limit int) ([]Group, error) {
 	for rows.Next() {
 		var g Group
 		var created, updated int64
-		if err := rows.Scan(&g.JID, &g.Name, &g.OwnerJID, &created, &updated); err != nil {
+		if err := rows.Scan(&g.JID, &g.Name, &g.OwnerJID, &created, &updated, &g.IsParent, &g.LinkedParentJID); err != nil {
 			return nil, err
 		}
 		g.CreatedAt = fromUnix(created)

@@ -157,12 +157,14 @@ func newGroupsInfoCmd(flags *rootFlags) *cobra.Command {
 				return out.WriteJSON(os.Stdout, info)
 			}
 
-			fmt.Fprintf(os.Stdout, "JID: %s\nName: %s\nOwner: %s\nCreated: %s\nParticipants: %d\n",
+			fmt.Fprintf(os.Stdout, "JID: %s\nName: %s\nOwner: %s\nCreated: %s\nParticipants: %d\nCommunity: %v\nParent: %s\n",
 				info.JID.String(),
 				info.GroupName.Name,
 				info.OwnerJID.String(),
 				info.GroupCreated.Local().Format(time.RFC3339),
 				len(info.Participants),
+				info.IsParent,
+				info.LinkedParentJID.String(),
 			)
 			return nil
 		},
@@ -483,7 +485,7 @@ func persistGroupInfo(db *store.DB, info *types.GroupInfo) error {
 	if info == nil {
 		return nil
 	}
-	if err := db.UpsertGroup(info.JID.String(), info.GroupName.Name, info.OwnerJID.String(), info.GroupCreated); err != nil {
+	if err := db.UpsertGroup(info.JID.String(), info.GroupName.Name, info.OwnerJID.String(), info.GroupCreated, info.IsParent, info.LinkedParentJID.String()); err != nil {
 		return err
 	}
 	var ps []store.GroupParticipant

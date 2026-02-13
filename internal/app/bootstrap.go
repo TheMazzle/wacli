@@ -39,7 +39,7 @@ func (a *App) refreshGroups(ctx context.Context) error {
 		if g == nil {
 			continue
 		}
-		_ = a.db.UpsertGroup(g.JID.String(), g.GroupName.Name, g.OwnerJID.String(), g.GroupCreated)
+		_ = a.db.UpsertGroup(g.JID.String(), g.GroupName.Name, g.OwnerJID.String(), g.GroupCreated, g.IsParent, g.LinkedParentJID.String())
 		_ = a.db.UpsertChat(g.JID.String(), "group", g.GroupName.Name, now)
 	}
 	return nil

@@ -295,7 +295,7 @@ func TestGroupsUpsertListAndParticipantsReplace(t *testing.T) {
 
 	gid := "123@g.us"
 	created := time.Date(2023, 12, 1, 0, 0, 0, 0, time.UTC)
-	if err := db.UpsertGroup(gid, "Group", "owner@s.whatsapp.net", created); err != nil {
+	if err := db.UpsertGroup(gid, "Group", "owner@s.whatsapp.net", created, false, ""); err != nil {
 		t.Fatalf("UpsertGroup: %v", err)
 	}
 	if err := db.ReplaceGroupParticipants(gid, []GroupParticipant{
