@@ -340,6 +340,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 		FileLength:      fileLen,
 		ReactionToMsgID: pm.ReactionToID,
 		ReactionEmoji:   pm.ReactionEmoji,
+		ReplyToMsgID:    pm.ReplyToID,
 	})
 }
 

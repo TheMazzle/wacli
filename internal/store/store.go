@@ -155,6 +155,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureReplyColumns(); err != nil {
+		return err
+	}
+
 	if err := d.ensureMessagesFTS(); err != nil {
 		return err
 	}
@@ -189,6 +193,23 @@ func (d *DB) ensureReactionColumns() error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN reaction_emoji TEXT`); err != nil {
 		return fmt.Errorf("add reaction_emoji column: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureReplyColumns() error {
+	ok, err := d.tableHasColumn("messages", "reply_to_msg_id")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN reply_to_msg_id TEXT`); err != nil {
+		return fmt.Errorf("add reply_to_msg_id column: %w", err)
+	}
+	if _, err := d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(chat_jid, reply_to_msg_id) WHERE reply_to_msg_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("create reply_to index: %w", err)
 	}
 	return nil
 }
@@ -458,6 +479,7 @@ type UpsertMessageParams struct {
 	FileLength     uint64
 	ReactionToMsgID string
 	ReactionEmoji   string
+	ReplyToMsgID    string
 }
 
 func (d *DB) UpsertMessage(p UpsertMessageParams) error {
@@ -466,8 +488,8 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text,
 			media_type, media_caption, filename, mime_type, direct_path,
 			media_key, file_sha256, file_enc_sha256, file_length,
-			reaction_to_msg_id, reaction_emoji
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			reaction_to_msg_id, reaction_emoji, reply_to_msg_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_jid, msg_id) DO UPDATE SET
 			chat_name=COALESCE(NULLIF(excluded.chat_name,''), messages.chat_name),
 			sender_jid=excluded.sender_jid,
@@ -486,11 +508,12 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			file_enc_sha256=CASE WHEN excluded.file_enc_sha256 IS NOT NULL AND length(excluded.file_enc_sha256)>0 THEN excluded.file_enc_sha256 ELSE messages.file_enc_sha256 END,
 			file_length=CASE WHEN excluded.file_length>0 THEN excluded.file_length ELSE messages.file_length END,
 			reaction_to_msg_id=COALESCE(NULLIF(excluded.reaction_to_msg_id,''), messages.reaction_to_msg_id),
-			reaction_emoji=COALESCE(NULLIF(excluded.reaction_emoji,''), messages.reaction_emoji)
+			reaction_emoji=COALESCE(NULLIF(excluded.reaction_emoji,''), messages.reaction_emoji),
+			reply_to_msg_id=COALESCE(NULLIF(excluded.reply_to_msg_id,''), messages.reply_to_msg_id)
 	`, p.ChatJID, nullIfEmpty(p.ChatName), p.MsgID, nullIfEmpty(p.SenderJID), nullIfEmpty(p.SenderName), unix(p.Timestamp), boolToInt(p.FromMe), nullIfEmpty(p.Text), nullIfEmpty(p.DisplayText),
 		nullIfEmpty(p.MediaType), nullIfEmpty(p.MediaCaption), nullIfEmpty(p.Filename), nullIfEmpty(p.MimeType), nullIfEmpty(p.DirectPath),
 		p.MediaKey, p.FileSHA256, p.FileEncSHA256, int64(p.FileLength),
-		nullIfEmpty(p.ReactionToMsgID), nullIfEmpty(p.ReactionEmoji),
+		nullIfEmpty(p.ReactionToMsgID), nullIfEmpty(p.ReactionEmoji), nullIfEmpty(p.ReplyToMsgID),
 	)
 	return err
 }
