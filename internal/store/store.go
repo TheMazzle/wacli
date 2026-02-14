@@ -1068,6 +1068,91 @@ func (d *DB) RemoveTag(jid, tag string) error {
 	return err
 }
 
+// Gap represents a time gap between two consecutive messages where
+// messages may be missing due to sync interruptions.
+type Gap struct {
+	BeforeTS int64 // Timestamp of the last message before the gap
+	AfterTS  int64 // Timestamp of the first message after the gap
+}
+
+// DetectGaps finds gaps larger than minGapSecs between consecutive
+// messages in a chat. Returns gap boundaries as (beforeTS, afterTS) pairs.
+func (d *DB) DetectGaps(chatJID string, minGapSecs int64) ([]Gap, error) {
+	rows, err := d.sql.Query(`
+		SELECT ts FROM messages
+		WHERE chat_jid = ?
+		ORDER BY ts ASC
+	`, chatJID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var gaps []Gap
+	var prevTS int64
+	first := true
+	for rows.Next() {
+		var ts int64
+		if err := rows.Scan(&ts); err != nil {
+			return nil, err
+		}
+		if !first && (ts-prevTS) > minGapSecs {
+			gaps = append(gaps, Gap{BeforeTS: prevTS, AfterTS: ts})
+		}
+		prevTS = ts
+		first = false
+	}
+	return gaps, rows.Err()
+}
+
+// GetMessageInfoNear returns the MessageInfo for the first message at or after
+// the given timestamp in a chat. Useful for backfill requests where we need
+// to identify the message right after a gap.
+func (d *DB) GetMessageInfoNear(chatJID string, ts int64) (MessageInfo, error) {
+	row := d.sql.QueryRow(`
+		SELECT m.chat_jid, m.msg_id, m.ts, m.from_me, COALESCE(m.sender_jid,''), COALESCE(m.sender_name,'')
+		FROM messages m
+		WHERE m.chat_jid = ? AND m.ts >= ?
+		ORDER BY m.ts ASC
+		LIMIT 1
+	`, chatJID, ts)
+	var out MessageInfo
+	var outTS int64
+	var fromMe int
+	if err := row.Scan(&out.ChatJID, &out.MsgID, &outTS, &fromMe, &out.SenderJID, &out.SenderName); err != nil {
+		return MessageInfo{}, err
+	}
+	out.Timestamp = fromUnix(outTS)
+	out.FromMe = fromMe != 0
+	return out, nil
+}
+
+// ListChatsWithMessages returns all chats that have at least one message,
+// ordered by most recent message first.
+func (d *DB) ListChatsWithMessages() ([]Chat, error) {
+	rows, err := d.sql.Query(`
+		SELECT c.jid, c.kind, COALESCE(c.name,''), COALESCE(c.last_message_ts,0)
+		FROM chats c
+		WHERE c.last_message_ts IS NOT NULL AND c.last_message_ts > 0
+		ORDER BY c.last_message_ts DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Chat
+	for rows.Next() {
+		var c Chat
+		var ts int64
+		if err := rows.Scan(&c.JID, &c.Kind, &c.Name, &ts); err != nil {
+			return nil, err
+		}
+		c.LastMessageTS = fromUnix(ts)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) HasFTS() bool { return d.ftsEnabled }
 
 func IsNotFound(err error) bool {

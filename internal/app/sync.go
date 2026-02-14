@@ -30,6 +30,7 @@ type SyncOptions struct {
 	DownloadMedia   bool
 	RefreshContacts bool
 	RefreshGroups   bool
+	BackfillGaps    bool          // auto-detect and backfill sync gaps on connect
 	IdleExit        time.Duration // only used for bootstrap/once
 	Verbosity       int           // future
 }
@@ -166,6 +167,12 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 		if err := opts.AfterConnect(ctx); err != nil {
 			return SyncResult{MessagesStored: messagesStored.Load()}, err
 		}
+	}
+
+	// Auto-backfill: detect gaps in message history and request missing messages.
+	// Uses the same WhatsApp connection, so no store lock conflict.
+	if opts.BackfillGaps {
+		a.backfillDetectedGaps(ctx)
 	}
 
 	if opts.Mode == SyncModeFollow {
@@ -428,5 +435,77 @@ func mediaLabel(mediaType string) string {
 		return "message"
 	default:
 		return mt
+	}
+}
+
+// backfillDetectedGaps scans all chats for message gaps >1 hour and sends
+// on-demand history sync requests to the primary device via the existing
+// WhatsApp connection. Responses are handled by the HistorySync event handler
+// that's already registered in Sync().
+func (a *App) backfillDetectedGaps(ctx context.Context) {
+	chats, err := a.db.ListChatsWithMessages()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[backfill] Failed to list chats: %v\n", err)
+		return
+	}
+
+	const minGapSecs = 3600 // 1 hour
+	var totalGaps int
+
+	for _, chat := range chats {
+		if ctx.Err() != nil {
+			return
+		}
+
+		gaps, err := a.db.DetectGaps(chat.JID, minGapSecs)
+		if err != nil || len(gaps) == 0 {
+			continue
+		}
+
+		totalGaps += len(gaps)
+		fmt.Fprintf(os.Stderr, "[backfill] %s: %d gap(s) detected\n", chat.Name, len(gaps))
+
+		// Request history for the most recent gap only (to avoid flooding).
+		// The response will fill in messages, and subsequent restarts will
+		// catch remaining gaps.
+		gap := gaps[len(gaps)-1]
+		msgInfo, err := a.db.GetMessageInfoNear(chat.JID, gap.AfterTS)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[backfill] %s: failed to get message info: %v\n", chat.Name, err)
+			continue
+		}
+
+		chatJID, err := types.ParseJID(msgInfo.ChatJID)
+		if err != nil {
+			continue
+		}
+
+		reqInfo := types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:     chatJID,
+				IsFromMe: msgInfo.FromMe,
+			},
+			ID:        types.MessageID(msgInfo.MsgID),
+			Timestamp: msgInfo.Timestamp,
+		}
+
+		fmt.Fprintf(os.Stderr, "[backfill] %s: requesting 50 messages before gap at %s\n",
+			chat.Name, msgInfo.Timestamp.Format("15:04:05"))
+
+		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, reqInfo, 50); err != nil {
+			fmt.Fprintf(os.Stderr, "[backfill] %s: request failed: %v\n", chat.Name, err)
+			continue
+		}
+
+		// Small delay between requests to avoid rate limiting.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+
+	if totalGaps > 0 {
+		fmt.Fprintf(os.Stderr, "[backfill] Sent requests for %d gap(s). Responses will arrive via history sync events.\n", totalGaps)
 	}
 }
