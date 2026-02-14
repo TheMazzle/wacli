@@ -449,12 +449,17 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 		return
 	}
 
-	const minGapSecs = 3600 // 1 hour
+	const minGapSecs = 3600        // 1 hour
+	const maxBackfillRequests = 20 // cap to avoid rate limiting / ban risk
 	var totalGaps int
+	var requestsSent int
 
 	for _, chat := range chats {
 		if ctx.Err() != nil {
 			return
+		}
+		if requestsSent >= maxBackfillRequests {
+			break
 		}
 
 		gaps, err := a.db.DetectGaps(chat.JID, minGapSecs)
@@ -496,16 +501,22 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 			fmt.Fprintf(os.Stderr, "[backfill] %s: request failed: %v\n", chat.Name, err)
 			continue
 		}
+		requestsSent++
 
-		// Small delay between requests to avoid rate limiting.
+		// Delay between requests to avoid rate limiting.
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(5 * time.Second):
 		}
 	}
 
 	if totalGaps > 0 {
-		fmt.Fprintf(os.Stderr, "[backfill] Sent requests for %d gap(s). Responses will arrive via history sync events.\n", totalGaps)
+		skipped := totalGaps - requestsSent
+		fmt.Fprintf(os.Stderr, "[backfill] Sent %d request(s) for %d gap(s).", requestsSent, totalGaps)
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, " Skipped %d (rate limit cap %d).", skipped, maxBackfillRequests)
+		}
+		fmt.Fprintln(os.Stderr, " Responses arrive via history sync events (best-effort).")
 	}
 }
