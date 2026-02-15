@@ -34,6 +34,7 @@ type ParsedMessage struct {
 	ReplyToDisplay string
 	ReactionToID   string
 	ReactionEmoji  string
+	MsgOrderID     *uint64
 }
 
 func ParseLiveMessage(evt *events.Message) ParsedMessage {
@@ -52,17 +53,18 @@ func ParseLiveMessage(evt *events.Message) ParsedMessage {
 	return msg
 }
 
-func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo) ParsedMessage {
+func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo, msgOrderID *uint64) ParsedMessage {
 	var chat types.JID
 	if parsed, err := types.ParseJID(chatJID); err == nil {
 		chat = parsed
 	}
 
 	pm := ParsedMessage{
-		Chat:      chat,
-		ID:        hist.GetKey().GetID(),
-		Timestamp: time.Unix(int64(hist.GetMessageTimestamp()), 0).UTC(),
-		FromMe:    hist.GetKey().GetFromMe(),
+		Chat:       chat,
+		ID:         hist.GetKey().GetID(),
+		Timestamp:  time.Unix(int64(hist.GetMessageTimestamp()), 0).UTC(),
+		FromMe:     hist.GetKey().GetFromMe(),
+		MsgOrderID: msgOrderID,
 	}
 
 	// Prefer top-level participant (works for LID-addressed groups),

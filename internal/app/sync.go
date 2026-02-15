@@ -118,7 +118,12 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 					if m.Message == nil {
 						continue
 					}
-					pm := wa.ParseHistoryMessage(chatID, m.Message)
+					var orderID *uint64
+					if m.MsgOrderID != nil {
+						v := m.GetMsgOrderID()
+						orderID = &v
+					}
+					pm := wa.ParseHistoryMessage(chatID, m.Message, orderID)
 					if pm.ID == "" || pm.Chat.IsEmpty() {
 						continue
 					}
@@ -357,6 +362,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 		ReactionToMsgID: pm.ReactionToID,
 		ReactionEmoji:   pm.ReactionEmoji,
 		ReplyToMsgID:    pm.ReplyToID,
+		MsgOrderID:      pm.MsgOrderID,
 	})
 }
 

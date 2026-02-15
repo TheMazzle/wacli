@@ -20,7 +20,7 @@ func TestParseHistoryMessageTextAndSender(t *testing.T) {
 		MessageTimestamp: proto.Uint64(uint64(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Unix())),
 		Message:          &waProto.Message{Conversation: proto.String("hello")},
 	}
-	pm := ParseHistoryMessage("123@s.whatsapp.net", h)
+	pm := ParseHistoryMessage("123@s.whatsapp.net", h, nil)
 	if pm.ID != "msgid" || pm.Text != "hello" {
 		t.Fatalf("unexpected parsed msg: %+v", pm)
 	}
@@ -48,7 +48,7 @@ func TestParseHistoryMessageTopLevelParticipant(t *testing.T) {
 		MessageTimestamp: proto.Uint64(uint64(time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC).Unix())),
 		Message:          &waProto.Message{Conversation: proto.String("from lid group")},
 	}
-	pm := ParseHistoryMessage(groupJID, h)
+	pm := ParseHistoryMessage(groupJID, h, nil)
 	if pm.SenderJID != senderLID {
 		t.Fatalf("expected sender %q from top-level participant, got %q", senderLID, pm.SenderJID)
 	}
@@ -68,7 +68,7 @@ func TestParseHistoryMessageKeyParticipantStillWorks(t *testing.T) {
 		MessageTimestamp: proto.Uint64(uint64(time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC).Unix())),
 		Message:          &waProto.Message{Conversation: proto.String("from regular group")},
 	}
-	pm := ParseHistoryMessage("120363001234567890@g.us", h)
+	pm := ParseHistoryMessage("120363001234567890@g.us", h, nil)
 	if pm.SenderJID != "sender@s.whatsapp.net" {
 		t.Fatalf("expected sender from key.participant, got %q", pm.SenderJID)
 	}

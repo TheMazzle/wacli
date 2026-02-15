@@ -167,6 +167,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureMsgOrderIDColumn(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -245,6 +249,20 @@ func (d *DB) ensureGroupColumns() error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE groups ADD COLUMN linked_parent_jid TEXT`); err != nil {
 		return fmt.Errorf("add linked_parent_jid column: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureMsgOrderIDColumn() error {
+	ok, err := d.tableHasColumn("messages", "msg_order_id")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN msg_order_id INTEGER`); err != nil {
+		return fmt.Errorf("add msg_order_id column: %w", err)
 	}
 	return nil
 }
@@ -498,16 +516,21 @@ type UpsertMessageParams struct {
 	ReactionToMsgID string
 	ReactionEmoji   string
 	ReplyToMsgID    string
+	MsgOrderID      *uint64
 }
 
 func (d *DB) UpsertMessage(p UpsertMessageParams) error {
+	var msgOrderID interface{}
+	if p.MsgOrderID != nil {
+		msgOrderID = int64(*p.MsgOrderID)
+	}
 	_, err := d.sql.Exec(`
 		INSERT INTO messages(
 			chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text,
 			media_type, media_caption, filename, mime_type, direct_path,
 			media_key, file_sha256, file_enc_sha256, file_length,
-			reaction_to_msg_id, reaction_emoji, reply_to_msg_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			reaction_to_msg_id, reaction_emoji, reply_to_msg_id, msg_order_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_jid, msg_id) DO UPDATE SET
 			chat_name=COALESCE(NULLIF(excluded.chat_name,''), messages.chat_name),
 			sender_jid=excluded.sender_jid,
@@ -527,11 +550,13 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			file_length=CASE WHEN excluded.file_length>0 THEN excluded.file_length ELSE messages.file_length END,
 			reaction_to_msg_id=COALESCE(NULLIF(excluded.reaction_to_msg_id,''), messages.reaction_to_msg_id),
 			reaction_emoji=COALESCE(NULLIF(excluded.reaction_emoji,''), messages.reaction_emoji),
-			reply_to_msg_id=COALESCE(NULLIF(excluded.reply_to_msg_id,''), messages.reply_to_msg_id)
+			reply_to_msg_id=COALESCE(NULLIF(excluded.reply_to_msg_id,''), messages.reply_to_msg_id),
+			msg_order_id=COALESCE(excluded.msg_order_id, messages.msg_order_id)
 	`, p.ChatJID, nullIfEmpty(p.ChatName), p.MsgID, nullIfEmpty(p.SenderJID), nullIfEmpty(p.SenderName), unix(p.Timestamp), boolToInt(p.FromMe), nullIfEmpty(p.Text), nullIfEmpty(p.DisplayText),
 		nullIfEmpty(p.MediaType), nullIfEmpty(p.MediaCaption), nullIfEmpty(p.Filename), nullIfEmpty(p.MimeType), nullIfEmpty(p.DirectPath),
 		p.MediaKey, p.FileSHA256, p.FileEncSHA256, int64(p.FileLength),
 		nullIfEmpty(p.ReactionToMsgID), nullIfEmpty(p.ReactionEmoji), nullIfEmpty(p.ReplyToMsgID),
+		msgOrderID,
 	)
 	return err
 }
@@ -1147,7 +1172,7 @@ type Gap struct {
 // messages in a chat. Returns gap boundaries as (beforeTS, afterTS) pairs.
 func (d *DB) DetectGaps(chatJID string, minGapSecs int64) ([]Gap, error) {
 	rows, err := d.sql.Query(`
-		SELECT ts FROM messages
+		SELECT ts, msg_order_id FROM messages
 		WHERE chat_jid = ?
 		ORDER BY ts ASC
 	`, chatJID)
@@ -1158,16 +1183,29 @@ func (d *DB) DetectGaps(chatJID string, minGapSecs int64) ([]Gap, error) {
 
 	var gaps []Gap
 	var prevTS int64
+	var prevOrderID *int64
 	first := true
 	for rows.Next() {
 		var ts int64
-		if err := rows.Scan(&ts); err != nil {
+		var orderID *int64
+		if err := rows.Scan(&ts, &orderID); err != nil {
 			return nil, err
 		}
-		if !first && (ts-prevTS) > minGapSecs {
-			gaps = append(gaps, Gap{BeforeTS: prevTS, AfterTS: ts})
+		if !first {
+			isGap := false
+			if orderID != nil && prevOrderID != nil {
+				// Both have sequence IDs: gap if they're not consecutive
+				isGap = (*orderID - *prevOrderID) > 1
+			} else {
+				// Fallback to timestamp-based detection
+				isGap = (ts - prevTS) > minGapSecs
+			}
+			if isGap {
+				gaps = append(gaps, Gap{BeforeTS: prevTS, AfterTS: ts})
+			}
 		}
 		prevTS = ts
+		prevOrderID = orderID
 		first = false
 	}
 	return gaps, rows.Err()
