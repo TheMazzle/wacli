@@ -20,11 +20,12 @@ const (
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command string `json:"command"` // "send_text", "send_file", "ping"
+	Command string `json:"command"` // "send_text", "send_file", "mark_read", "ping"
 	To      string `json:"to,omitempty"`
 	Message string `json:"message,omitempty"`
 	File    string `json:"file,omitempty"`
 	Caption string `json:"caption,omitempty"`
+	ChatJID string `json:"chat_jid,omitempty"` // for mark_read
 }
 
 // Response represents the result from the sync daemon.
@@ -43,6 +44,7 @@ type SendTextResult struct {
 // Handler processes incoming IPC requests.
 type Handler interface {
 	SendText(to, message string) (msgID string, err error)
+	MarkRead(chatJID string) error
 }
 
 // Server listens on a Unix socket for IPC requests.
@@ -166,6 +168,15 @@ func (s *Server) processRequest(req Request) Response {
 		}
 		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
 	
+	case "mark_read":
+		if req.ChatJID == "" {
+			return Response{Success: false, Error: "chat_jid is required"}
+		}
+		if err := s.handler.MarkRead(req.ChatJID); err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: map[string]string{"chat_jid": req.ChatJID}}
+
 	default:
 		return Response{Success: false, Error: fmt.Sprintf("unknown command: %s", req.Command)}
 	}
@@ -220,6 +231,22 @@ func (c *Client) SendText(to, message string) (*SendTextResult, error) {
 	}
 	
 	return &result, nil
+}
+
+// MarkRead marks a chat as read via the sync daemon.
+func (c *Client) MarkRead(chatJID string) error {
+	req := Request{
+		Command: "mark_read",
+		ChatJID: chatJID,
+	}
+	resp, err := c.send(req)
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
 }
 
 // Ping checks if the daemon is responsive.

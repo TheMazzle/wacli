@@ -339,6 +339,16 @@ func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupI
 	return cli.GetGroupInfo(ctx, jid)
 }
 
+func (c *Client) MarkRead(ctx context.Context, ids []types.MessageID, timestamp time.Time, chat types.JID, sender types.JID) error {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return fmt.Errorf("not connected")
+	}
+	return cli.MarkRead(ctx, ids, timestamp, chat, sender)
+}
+
 func (c *Client) Logout(ctx context.Context) error {
 	c.mu.Lock()
 	cli := c.client

@@ -14,6 +14,7 @@ import (
 	"github.com/steipete/wacli/internal/out"
 	"github.com/steipete/wacli/internal/store"
 	"github.com/steipete/wacli/internal/wa"
+	"go.mau.fi/whatsmeow/types"
 )
 
 // syncHandler implements ipc.Handler for the sync daemon.
@@ -63,6 +64,68 @@ func (h *syncHandler) SendText(to, message string) (string, error) {
 	})
 	
 	return string(msgID), nil
+}
+
+func (h *syncHandler) MarkRead(chatJID string) error {
+	if h.app == nil {
+		return fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return fmt.Errorf("whatsapp not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	chatJIDParsed, err := wa.ParseUserOrJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("parse chat JID: %w", err)
+	}
+
+	// Get recent unread messages to mark as read
+	msgs, err := h.app.DB().GetRecentUnreadMessages(chatJID, 10)
+	if err != nil || len(msgs) == 0 {
+		// No messages to mark — just update the read timestamp
+		chat, err := h.app.DB().GetChat(chatJID)
+		if err != nil {
+			return nil // silently ignore if chat not found
+		}
+		_ = h.app.DB().UpdateReadTS(chatJID, chat.LastMessageTS.UTC().Unix())
+		return nil
+	}
+
+	// Group by sender (WhatsApp requires same-sender batches for groups)
+	senderBatches := make(map[string][]string) // sender_jid -> []msg_id
+	for _, m := range msgs {
+		senderBatches[m.SenderJID] = append(senderBatches[m.SenderJID], m.MsgID)
+	}
+
+	now := time.Now()
+	isGroup := wa.IsGroupJID(chatJIDParsed)
+
+	for senderJIDStr, msgIDs := range senderBatches {
+		var senderJID types.JID
+		if isGroup && senderJIDStr != "" {
+			senderJID, _ = wa.ParseUserOrJID(senderJIDStr)
+		}
+
+		typeIDs := make([]types.MessageID, len(msgIDs))
+		for i, id := range msgIDs {
+			typeIDs[i] = types.MessageID(id)
+		}
+
+		if err := h.app.WA().MarkRead(ctx, typeIDs, now, chatJIDParsed, senderJID); err != nil {
+			fmt.Fprintf(os.Stderr, "[mark-read] failed for %s: %v\n", chatJID, err)
+		}
+	}
+
+	// Update local read timestamp
+	_ = h.app.DB().UpdateReadTS(chatJID, now.UTC().Unix())
+
+	return nil
 }
 
 func newSyncCmd(flags *rootFlags) *cobra.Command {

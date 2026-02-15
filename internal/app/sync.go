@@ -131,6 +131,14 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 				}
 			}
 			fmt.Fprintf(os.Stderr, "\rSynced %d messages...", messagesStored.Load())
+		case *events.Receipt:
+			// Track read state: ReceiptTypeReadSelf = we read on another device (e.g. phone),
+			// ReceiptTypeRead = someone else read our message.
+			if v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypeReadSelf {
+				chatJID := v.Chat.ToNonAD().String()
+				readTS := v.Timestamp.UTC().Unix()
+				_ = a.db.UpdateReadTS(chatJID, readTS)
+			}
 		case *events.Connected:
 			fmt.Fprintln(os.Stderr, "\nConnected.")
 		case *events.Disconnected:

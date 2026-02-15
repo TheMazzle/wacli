@@ -163,6 +163,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureReadColumns(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -210,6 +214,20 @@ func (d *DB) ensureReplyColumns() error {
 	}
 	if _, err := d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(chat_jid, reply_to_msg_id) WHERE reply_to_msg_id IS NOT NULL`); err != nil {
 		return fmt.Errorf("create reply_to index: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureReadColumns() error {
+	ok, err := d.tableHasColumn("chats", "read_ts")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE chats ADD COLUMN read_ts INTEGER`); err != nil {
+		return fmt.Errorf("add read_ts column: %w", err)
 	}
 	return nil
 }
@@ -1199,6 +1217,73 @@ func (d *DB) ListChatsWithMessages() ([]Chat, error) {
 		}
 		c.LastMessageTS = fromUnix(ts)
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// UpdateReadTS updates the read watermark for a chat.
+// Uses MAX() to never regress the timestamp.
+func (d *DB) UpdateReadTS(chatJID string, readTS int64) error {
+	_, err := d.sql.Exec(`
+		UPDATE chats SET read_ts = MAX(COALESCE(read_ts, 0), ?)
+		WHERE jid = ?`, readTS, chatJID)
+	return err
+}
+
+// GetReadTimestamps returns a map of chat JID → read_ts for all chats
+// that have a non-null read timestamp.
+func (d *DB) GetReadTimestamps() (map[string]int64, error) {
+	rows, err := d.sql.Query(`SELECT jid, read_ts FROM chats WHERE read_ts IS NOT NULL AND read_ts > 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var jid string
+		var ts int64
+		if err := rows.Scan(&jid, &ts); err != nil {
+			return nil, err
+		}
+		out[jid] = ts
+	}
+	return out, rows.Err()
+}
+
+// RecentUnreadMessage holds a message ID with its sender, needed for
+// WhatsApp's MarkRead() which requires sender JID for group chats.
+type RecentUnreadMessage struct {
+	MsgID     string
+	SenderJID string
+}
+
+// GetRecentUnreadMessages returns the N most recent messages in a chat
+// that are not from_me and not reactions. For group chats, the caller
+// should group by SenderJID before calling MarkRead().
+func (d *DB) GetRecentUnreadMessages(chatJID string, limit int) ([]RecentUnreadMessage, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := d.sql.Query(`
+		SELECT msg_id, COALESCE(sender_jid, '')
+		FROM messages
+		WHERE chat_jid = ?
+		  AND from_me = 0
+		  AND (reaction_to_msg_id IS NULL OR reaction_to_msg_id = '')
+		ORDER BY ts DESC
+		LIMIT ?
+	`, chatJID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecentUnreadMessage
+	for rows.Next() {
+		var m RecentUnreadMessage
+		if err := rows.Scan(&m.MsgID, &m.SenderJID); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }
