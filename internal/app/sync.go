@@ -457,7 +457,7 @@ func mediaLabel(mediaType string) string {
 	}
 }
 
-// backfillDetectedGaps scans all chats for message gaps >1 hour and sends
+// backfillDetectedGaps scans all chats for message gaps >6 hours and sends
 // on-demand history sync requests to the primary device via the existing
 // WhatsApp connection. Responses are handled by the HistorySync event handler
 // that's already registered in Sync().
@@ -468,7 +468,7 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 		return
 	}
 
-	const minGapSecs = 3600        // 1 hour
+	const minGapSecs = 21600       // 6 hours
 	const maxBackfillRequests = 20 // cap to avoid rate limiting / ban risk
 	var totalGaps int
 	var requestsSent int
