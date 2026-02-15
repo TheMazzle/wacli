@@ -20,12 +20,14 @@ const (
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command string `json:"command"` // "send_text", "send_file", "mark_read", "ping"
-	To      string `json:"to,omitempty"`
-	Message string `json:"message,omitempty"`
-	File    string `json:"file,omitempty"`
-	Caption string `json:"caption,omitempty"`
-	ChatJID string `json:"chat_jid,omitempty"` // for mark_read
+	Command  string `json:"command"` // "send_text", "send_file", "mark_read", "backfill", "ping"
+	To       string `json:"to,omitempty"`
+	Message  string `json:"message,omitempty"`
+	File     string `json:"file,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+	ChatJID  string `json:"chat_jid,omitempty"`  // for mark_read, backfill
+	BeforeTS int64  `json:"before_ts,omitempty"` // for backfill: timestamp of gap boundary
+	Count    int    `json:"count,omitempty"`      // for backfill: messages to request (default 50)
 }
 
 // Response represents the result from the sync daemon.
@@ -45,6 +47,7 @@ type SendTextResult struct {
 type Handler interface {
 	SendText(to, message string) (msgID string, err error)
 	MarkRead(chatJID string) error
+	RequestBackfill(chatJID string, beforeTS int64, count int) error
 }
 
 // Server listens on a Unix socket for IPC requests.
@@ -176,6 +179,19 @@ func (s *Server) processRequest(req Request) Response {
 			return Response{Success: false, Error: err.Error()}
 		}
 		return Response{Success: true, Data: map[string]string{"chat_jid": req.ChatJID}}
+
+	case "backfill":
+		if req.ChatJID == "" {
+			return Response{Success: false, Error: "chat_jid is required"}
+		}
+		count := req.Count
+		if count <= 0 {
+			count = 50
+		}
+		if err := s.handler.RequestBackfill(req.ChatJID, req.BeforeTS, count); err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: map[string]any{"chat_jid": req.ChatJID, "count": count}}
 
 	default:
 		return Response{Success: false, Error: fmt.Sprintf("unknown command: %s", req.Command)}

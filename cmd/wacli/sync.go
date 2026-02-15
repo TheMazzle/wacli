@@ -128,6 +128,51 @@ func (h *syncHandler) MarkRead(chatJID string) error {
 	return nil
 }
 
+func (h *syncHandler) RequestBackfill(chatJID string, beforeTS int64, count int) error {
+	if h.app == nil {
+		return fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return fmt.Errorf("whatsapp not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Find the message at or after the gap boundary to use as anchor
+	msgInfo, err := h.app.DB().GetMessageInfoNear(chatJID, beforeTS)
+	if err != nil {
+		return fmt.Errorf("no messages near timestamp %d for %s: %w", beforeTS, chatJID, err)
+	}
+
+	chatJIDParsed, err := types.ParseJID(msgInfo.ChatJID)
+	if err != nil {
+		return fmt.Errorf("parse chat JID: %w", err)
+	}
+
+	reqInfo := types.MessageInfo{
+		MessageSource: types.MessageSource{
+			Chat:     chatJIDParsed,
+			IsFromMe: msgInfo.FromMe,
+		},
+		ID:        types.MessageID(msgInfo.MsgID),
+		Timestamp: msgInfo.Timestamp,
+	}
+
+	fmt.Fprintf(os.Stderr, "[backfill-ipc] Requesting %d messages for %s before %s\n",
+		count, chatJID, msgInfo.Timestamp.Format("2006-01-02 15:04:05"))
+
+	if _, err := h.app.WA().RequestHistorySyncOnDemand(ctx, reqInfo, count); err != nil {
+		return fmt.Errorf("request history sync: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "[backfill-ipc] Request sent (response arrives via history sync events)\n")
+	return nil
+}
+
 func newSyncCmd(flags *rootFlags) *cobra.Command {
 	var once bool
 	var follow bool
