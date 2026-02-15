@@ -194,6 +194,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 				if err := a.wa.ReconnectWithBackoff(ctx, 2*time.Second, 30*time.Second); err != nil {
 					return SyncResult{MessagesStored: messagesStored.Load()}, err
 				}
+				fmt.Fprintln(os.Stderr, "Reconnected.")
+				if opts.BackfillGaps {
+					go a.backfillDetectedGaps(ctx)
+				}
 			}
 		}
 	}
@@ -214,6 +218,10 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 			fmt.Fprintln(os.Stderr, "Reconnecting...")
 			if err := a.wa.ReconnectWithBackoff(ctx, 2*time.Second, 30*time.Second); err != nil {
 				return SyncResult{MessagesStored: messagesStored.Load()}, err
+			}
+			fmt.Fprintln(os.Stderr, "Reconnected.")
+			if opts.BackfillGaps {
+				go a.backfillDetectedGaps(ctx)
 			}
 		case <-ticker.C:
 			last := time.Unix(0, lastEvent.Load())

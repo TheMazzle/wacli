@@ -252,6 +252,6 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&refreshContacts, "refresh-contacts", false, "refresh contacts from session store into local DB")
 	cmd.Flags().BoolVar(&refreshGroups, "refresh-groups", false, "refresh joined groups (live) into local DB")
 	cmd.Flags().BoolVar(&enableIPC, "enable-ipc", true, "enable IPC socket for send commands (--follow mode only)")
-	cmd.Flags().BoolVar(&backfillGaps, "backfill-gaps", false, "detect and backfill message gaps on connect (requires phone online)")
+	cmd.Flags().BoolVar(&backfillGaps, "backfill-gaps", true, "detect and backfill message gaps on connect and reconnect (requires phone online)")
 	return cmd
 }
