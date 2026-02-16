@@ -30,7 +30,8 @@ type Request struct {
 	BeforeTS     int64  `json:"before_ts,omitempty"`         // for backfill: timestamp of gap boundary
 	Count        int    `json:"count,omitempty"`             // for backfill: messages to request (default 50)
 	ReplyToMsgID string `json:"reply_to_msg_id,omitempty"`   // for send_text: reply to a specific message
-	Emoji        string `json:"emoji,omitempty"`             // for send_reaction: the emoji to react with
+	Emoji        string `json:"emoji,omitempty"`             // for send_reaction: the emoji to react with (empty = remove)
+	FromMe       bool   `json:"from_me,omitempty"`           // for send_reaction: whether the target message is from the sender
 }
 
 // Response represents the result from the sync daemon.
@@ -49,7 +50,7 @@ type SendTextResult struct {
 // Handler processes incoming IPC requests.
 type Handler interface {
 	SendText(to, message, replyToMsgID string) (msgID string, err error)
-	SendReaction(chatJID, msgID, emoji string) error
+	SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error
 	MarkRead(chatJID string) error
 	RequestBackfill(chatJID string, beforeTS int64, count int) error
 	DownloadMedia(chatJID, msgID string) error
@@ -177,10 +178,10 @@ func (s *Server) processRequest(req Request) Response {
 		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
 
 	case "send_reaction":
-		if req.ChatJID == "" || req.MsgID == "" || req.Emoji == "" {
-			return Response{Success: false, Error: "chat_jid, msg_id and emoji are required"}
+		if req.ChatJID == "" || req.MsgID == "" {
+			return Response{Success: false, Error: "chat_jid and msg_id are required"}
 		}
-		if err := s.handler.SendReaction(req.ChatJID, req.MsgID, req.Emoji); err != nil {
+		if err := s.handler.SendReaction(req.ChatJID, req.MsgID, req.Emoji, req.FromMe); err != nil {
 			return Response{Success: false, Error: err.Error()}
 		}
 		return Response{Success: true, Data: map[string]string{"chat_jid": req.ChatJID, "msg_id": req.MsgID, "emoji": req.Emoji}}

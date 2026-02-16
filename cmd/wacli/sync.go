@@ -73,7 +73,7 @@ func (h *syncHandler) SendText(to, message, replyToMsgID string) (string, error)
 	return string(msgID), nil
 }
 
-func (h *syncHandler) SendReaction(chatJID, msgID, emoji string) error {
+func (h *syncHandler) SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error {
 	if h.app == nil {
 		return fmt.Errorf("app not initialized")
 	}
@@ -92,12 +92,12 @@ func (h *syncHandler) SendReaction(chatJID, msgID, emoji string) error {
 		return fmt.Errorf("parse chat JID: %w", err)
 	}
 
-	reactionMsgID, err := h.app.WA().SendReaction(ctx, chatJIDParsed, msgID, emoji, false)
+	reactionMsgID, err := h.app.WA().SendReaction(ctx, chatJIDParsed, msgID, emoji, targetFromMe)
 	if err != nil {
 		return fmt.Errorf("send reaction: %w", err)
 	}
 
-	// Store the reaction in the local DB
+	// Store the reaction in the local DB (empty emoji = remove, still store for tracking)
 	now := time.Now().UTC()
 	_ = h.app.DB().UpsertMessage(store.UpsertMessageParams{
 		ChatJID:         chatJIDParsed.String(),
