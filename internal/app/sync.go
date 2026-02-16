@@ -144,6 +144,8 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 				readTS := v.Timestamp.UTC().Unix()
 				_ = a.db.UpdateReadTS(chatJID, readTS)
 			}
+		case *events.GroupInfo:
+			a.storeGroupInfoEvent(ctx, v)
 		case *events.Connected:
 			fmt.Fprintln(os.Stderr, "\nConnected.")
 		case *events.Disconnected:
@@ -364,6 +366,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 		ReplyToMsgID:    pm.ReplyToID,
 		MsgOrderID:      pm.MsgOrderID,
 		IsLive:          pm.IsLive,
+		EventType:       pm.EventType,
 	})
 }
 
@@ -544,5 +547,89 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 			fmt.Fprintf(os.Stderr, " Skipped %d (rate limit cap %d).", skipped, maxBackfillRequests)
 		}
 		fmt.Fprintln(os.Stderr, " Responses arrive via history sync events (best-effort).")
+	}
+}
+
+// storeGroupInfoEvent converts a whatsmeow GroupInfo event (name change,
+// topic change, participant join/leave/promote/demote) into one or more
+// system messages stored in the messages table.
+func (a *App) storeGroupInfoEvent(ctx context.Context, evt *events.GroupInfo) {
+	chatJID := evt.JID.ToNonAD().String()
+	chatName := ""
+	if gi, err := a.wa.GetGroupInfo(ctx, evt.JID); err == nil && gi != nil {
+		chatName = gi.GroupName.Name
+	}
+
+	senderJID := ""
+	senderName := ""
+	if evt.Sender != nil {
+		senderJID = evt.Sender.ToNonAD().String()
+		if info, err := a.wa.GetContact(ctx, *evt.Sender); err == nil {
+			senderName = wa.BestContactName(info)
+		}
+	}
+	if senderName == "" {
+		senderName = evt.Notify
+	}
+
+	ts := evt.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+
+	// Helper to resolve a JID to a display name.
+	resolveName := func(jid types.JID) string {
+		normalized := jid.ToNonAD()
+		if info, err := a.wa.GetContact(ctx, normalized); err == nil {
+			if name := wa.BestContactName(info); name != "" {
+				return name
+			}
+		}
+		return normalized.User
+	}
+
+	// Collect all system messages from this event.
+	var texts []string
+
+	if evt.Name != nil {
+		texts = append(texts, fmt.Sprintf("%s changed the group name to \"%s\"", senderName, evt.Name.Name))
+	}
+	if evt.Topic != nil {
+		if evt.Topic.Topic == "" {
+			texts = append(texts, fmt.Sprintf("%s cleared the group description", senderName))
+		} else {
+			texts = append(texts, fmt.Sprintf("%s changed the group description", senderName))
+		}
+	}
+	for _, jid := range evt.Join {
+		texts = append(texts, fmt.Sprintf("%s joined the group", resolveName(jid)))
+	}
+	for _, jid := range evt.Leave {
+		texts = append(texts, fmt.Sprintf("%s left the group", resolveName(jid)))
+	}
+	for _, jid := range evt.Promote {
+		texts = append(texts, fmt.Sprintf("%s was promoted to admin", resolveName(jid)))
+	}
+	for _, jid := range evt.Demote {
+		texts = append(texts, fmt.Sprintf("%s was demoted from admin", resolveName(jid)))
+	}
+
+	// Store each as a separate system message with a synthetic msg_id.
+	for i, text := range texts {
+		msgID := fmt.Sprintf("system_%d_%d", ts.Unix(), i)
+		_ = a.db.UpsertChat(chatJID, "group", chatName, ts)
+		_ = a.db.UpsertMessage(store.UpsertMessageParams{
+			ChatJID:    chatJID,
+			ChatName:   chatName,
+			MsgID:      msgID,
+			SenderJID:  senderJID,
+			SenderName: senderName,
+			Timestamp:  ts,
+			FromMe:     false,
+			Text:       text,
+			DisplayText: text,
+			EventType:  "system",
+			IsLive:     true,
+		})
 	}
 }

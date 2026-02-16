@@ -36,6 +36,7 @@ type ParsedMessage struct {
 	ReactionEmoji  string
 	MsgOrderID     *uint64
 	IsLive         bool
+	EventType      string // "message" (default), "system"
 }
 
 func ParseLiveMessage(evt *events.Message) ParsedMessage {
@@ -197,6 +198,34 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) {
 		}
 		if quoted := ctx.GetQuotedMessage(); quoted != nil {
 			pm.ReplyToDisplay = strings.TrimSpace(displayTextForProto(quoted))
+		}
+	}
+
+	// Detect protocol/system messages that would otherwise be stored with empty text.
+	// Only set if nothing above already populated the message.
+	if pm.Text == "" && pm.Media == nil && pm.ReactionToID == "" {
+		if proto := m.GetProtocolMessage(); proto != nil {
+			pm.EventType = "system"
+			switch proto.GetType() {
+			case waProto.ProtocolMessage_MESSAGE_EDIT:
+				pm.Text = "Message edited"
+			case waProto.ProtocolMessage_REVOKE:
+				pm.Text = "Message deleted"
+			case waProto.ProtocolMessage_EPHEMERAL_SETTING:
+				dur := proto.GetEphemeralExpiration()
+				if dur == 0 {
+					pm.Text = "Disappearing messages turned off"
+				} else {
+					pm.Text = "Disappearing messages turned on"
+				}
+			default:
+				// Other protocol messages (key distribution, etc.) — skip silently
+				pm.EventType = ""
+			}
+		}
+		if m.GetGroupInviteMessage() != nil {
+			pm.EventType = "system"
+			pm.Text = "Group invite shared"
 		}
 	}
 }
