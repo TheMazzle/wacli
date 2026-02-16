@@ -40,6 +40,8 @@ type WAClient interface {
 	GetProfilePictureInfo(ctx context.Context, jid types.JID, params *whatsmeow.GetProfilePictureParams) (*types.ProfilePictureInfo, error)
 
 	SendText(ctx context.Context, to types.JID, text string) (types.MessageID, error)
+	SendReply(ctx context.Context, to types.JID, text, replyToMsgID string) (types.MessageID, error)
+	SendReaction(ctx context.Context, to types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error)
 	SendProtoMessage(ctx context.Context, to types.JID, msg *waProto.Message) (types.MessageID, error)
 	Upload(ctx context.Context, data []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error)
 	DownloadMediaToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType, mmsType string, targetPath string) (int64, error)

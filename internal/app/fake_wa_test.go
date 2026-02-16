@@ -212,6 +212,14 @@ func (f *fakeWA) SendText(ctx context.Context, to types.JID, text string) (types
 	return types.MessageID("msgid"), nil
 }
 
+func (f *fakeWA) SendReply(ctx context.Context, to types.JID, text, replyToMsgID string) (types.MessageID, error) {
+	return types.MessageID("msgid"), nil
+}
+
+func (f *fakeWA) SendReaction(ctx context.Context, to types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error) {
+	return types.MessageID("msgid"), nil
+}
+
 func (f *fakeWA) SendProtoMessage(ctx context.Context, to types.JID, msg *waProto.Message) (types.MessageID, error) {
 	return types.MessageID("msgid"), nil
 }

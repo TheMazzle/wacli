@@ -20,15 +20,17 @@ const (
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command  string `json:"command"` // "send_text", "send_file", "mark_read", "backfill", "media_download", "ping"
-	To       string `json:"to,omitempty"`
-	Message  string `json:"message,omitempty"`
-	File     string `json:"file,omitempty"`
-	Caption  string `json:"caption,omitempty"`
-	ChatJID  string `json:"chat_jid,omitempty"`  // for mark_read, backfill, media_download
-	MsgID    string `json:"msg_id,omitempty"`    // for media_download
-	BeforeTS int64  `json:"before_ts,omitempty"` // for backfill: timestamp of gap boundary
-	Count    int    `json:"count,omitempty"`      // for backfill: messages to request (default 50)
+	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "ping"
+	To           string `json:"to,omitempty"`
+	Message      string `json:"message,omitempty"`
+	File         string `json:"file,omitempty"`
+	Caption      string `json:"caption,omitempty"`
+	ChatJID      string `json:"chat_jid,omitempty"`          // for mark_read, backfill, media_download, send_reaction
+	MsgID        string `json:"msg_id,omitempty"`            // for media_download, send_reaction
+	BeforeTS     int64  `json:"before_ts,omitempty"`         // for backfill: timestamp of gap boundary
+	Count        int    `json:"count,omitempty"`             // for backfill: messages to request (default 50)
+	ReplyToMsgID string `json:"reply_to_msg_id,omitempty"`   // for send_text: reply to a specific message
+	Emoji        string `json:"emoji,omitempty"`             // for send_reaction: the emoji to react with
 }
 
 // Response represents the result from the sync daemon.
@@ -46,7 +48,8 @@ type SendTextResult struct {
 
 // Handler processes incoming IPC requests.
 type Handler interface {
-	SendText(to, message string) (msgID string, err error)
+	SendText(to, message, replyToMsgID string) (msgID string, err error)
+	SendReaction(chatJID, msgID, emoji string) error
 	MarkRead(chatJID string) error
 	RequestBackfill(chatJID string, beforeTS int64, count int) error
 	DownloadMedia(chatJID, msgID string) error
@@ -167,11 +170,20 @@ func (s *Server) processRequest(req Request) Response {
 		if req.To == "" || req.Message == "" {
 			return Response{Success: false, Error: "to and message are required"}
 		}
-		msgID, err := s.handler.SendText(req.To, req.Message)
+		msgID, err := s.handler.SendText(req.To, req.Message, req.ReplyToMsgID)
 		if err != nil {
 			return Response{Success: false, Error: err.Error()}
 		}
 		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
+	case "send_reaction":
+		if req.ChatJID == "" || req.MsgID == "" || req.Emoji == "" {
+			return Response{Success: false, Error: "chat_jid, msg_id and emoji are required"}
+		}
+		if err := s.handler.SendReaction(req.ChatJID, req.MsgID, req.Emoji); err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: map[string]string{"chat_jid": req.ChatJID, "msg_id": req.MsgID, "emoji": req.Emoji}}
 	
 	case "mark_read":
 		if req.ChatJID == "" {

@@ -23,7 +23,7 @@ type syncHandler struct {
 	app *appPkg.App
 }
 
-func (h *syncHandler) SendText(to, message string) (string, error) {
+func (h *syncHandler) SendText(to, message, replyToMsgID string) (string, error) {
 	if h.app == nil {
 		return "", fmt.Errorf("app not initialized")
 	}
@@ -33,20 +33,25 @@ func (h *syncHandler) SendText(to, message string) (string, error) {
 	if !h.app.WA().IsConnected() {
 		return "", fmt.Errorf("whatsapp not connected")
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	toJID, err := wa.ParseUserOrJID(to)
 	if err != nil {
 		return "", fmt.Errorf("parse recipient: %w", err)
 	}
-	
-	msgID, err := h.app.WA().SendText(ctx, toJID, message)
+
+	var msgID types.MessageID
+	if replyToMsgID != "" {
+		msgID, err = h.app.WA().SendReply(ctx, toJID, message, replyToMsgID)
+	} else {
+		msgID, err = h.app.WA().SendText(ctx, toJID, message)
+	}
 	if err != nil {
 		return "", fmt.Errorf("send: %w", err)
 	}
-	
+
 	// Store the message in the local DB
 	now := time.Now().UTC()
 	chat := toJID
@@ -54,17 +59,59 @@ func (h *syncHandler) SendText(to, message string) (string, error) {
 	kind := chatKindFromJID(chat)
 	_ = h.app.DB().UpsertChat(chat.String(), kind, chatName, now)
 	_ = h.app.DB().UpsertMessage(store.UpsertMessageParams{
-		ChatJID:    chat.String(),
-		ChatName:   chatName,
-		MsgID:      string(msgID),
-		SenderJID:  "",
-		SenderName: "me",
-		Timestamp:  now,
-		FromMe:     true,
-		Text:       message,
+		ChatJID:      chat.String(),
+		ChatName:     chatName,
+		MsgID:        string(msgID),
+		SenderJID:    "",
+		SenderName:   "me",
+		Timestamp:    now,
+		FromMe:       true,
+		Text:         message,
+		ReplyToMsgID: replyToMsgID,
 	})
-	
+
 	return string(msgID), nil
+}
+
+func (h *syncHandler) SendReaction(chatJID, msgID, emoji string) error {
+	if h.app == nil {
+		return fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return fmt.Errorf("whatsapp not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	chatJIDParsed, err := wa.ParseUserOrJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("parse chat JID: %w", err)
+	}
+
+	reactionMsgID, err := h.app.WA().SendReaction(ctx, chatJIDParsed, msgID, emoji, false)
+	if err != nil {
+		return fmt.Errorf("send reaction: %w", err)
+	}
+
+	// Store the reaction in the local DB
+	now := time.Now().UTC()
+	_ = h.app.DB().UpsertMessage(store.UpsertMessageParams{
+		ChatJID:         chatJIDParsed.String(),
+		MsgID:           string(reactionMsgID),
+		SenderJID:       "",
+		SenderName:      "me",
+		Timestamp:       now,
+		FromMe:          true,
+		ReactionToMsgID: msgID,
+		ReactionEmoji:   emoji,
+		IsLive:          true,
+	})
+
+	return nil
 }
 
 func (h *syncHandler) MarkRead(chatJID string) error {

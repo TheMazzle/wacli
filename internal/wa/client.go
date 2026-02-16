@@ -16,6 +16,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
 
 type Options struct {
@@ -189,6 +190,55 @@ func (c *Client) SendProtoMessage(ctx context.Context, to types.JID, msg *waProt
 	c.mu.Unlock()
 	if cli == nil || !cli.IsConnected() {
 		return "", fmt.Errorf("not connected")
+	}
+	resp, err := cli.SendMessage(ctx, to, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+func (c *Client) SendReply(ctx context.Context, to types.JID, text, replyToMsgID string) (types.MessageID, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return "", fmt.Errorf("not connected")
+	}
+	msg := &waProto.Message{
+		ExtendedTextMessage: &waProto.ExtendedTextMessage{
+			Text: proto.String(text),
+			ContextInfo: &waProto.ContextInfo{
+				StanzaID:      proto.String(replyToMsgID),
+				Participant:   proto.String(to.String()),
+				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
+			},
+		},
+	}
+	resp, err := cli.SendMessage(ctx, to, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+func (c *Client) SendReaction(ctx context.Context, to types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return "", fmt.Errorf("not connected")
+	}
+	msg := &waProto.Message{
+		ReactionMessage: &waProto.ReactionMessage{
+			Key: &waProto.MessageKey{
+				RemoteJID: proto.String(to.String()),
+				FromMe:    proto.Bool(fromMe),
+				ID:        proto.String(targetMsgID),
+			},
+			Text:              proto.String(emoji),
+			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
+		},
 	}
 	resp, err := cli.SendMessage(ctx, to, msg)
 	if err != nil {
