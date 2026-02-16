@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -170,6 +171,52 @@ func (h *syncHandler) RequestBackfill(chatJID string, beforeTS int64, count int)
 	}
 
 	fmt.Fprintf(os.Stderr, "[backfill-ipc] Request sent (response arrives via history sync events)\n")
+	return nil
+}
+
+func (h *syncHandler) DownloadMedia(chatJID, msgID string) error {
+	if h.app == nil {
+		return fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return fmt.Errorf("whatsapp not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	fmt.Fprintf(os.Stderr, "[media-ipc] Downloading media for %s/%s\n", chatJID, msgID)
+
+	info, err := h.app.DB().GetMediaDownloadInfo(chatJID, msgID)
+	if err != nil {
+		return fmt.Errorf("get media info: %w", err)
+	}
+
+	if info.LocalPath != "" {
+		return nil // already downloaded
+	}
+
+	targetPath, err := h.app.ResolveMediaOutputPath(info, "")
+	if err != nil {
+		return fmt.Errorf("resolve output path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
+		return fmt.Errorf("create media dir: %w", err)
+	}
+
+	if _, err := h.app.WA().DownloadMediaToFile(ctx, info.DirectPath, info.FileEncSHA256, info.FileSHA256, info.MediaKey, info.FileLength, info.MediaType, "", targetPath); err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if err := h.app.DB().MarkMediaDownloaded(chatJID, msgID, targetPath, now); err != nil {
+		return fmt.Errorf("mark downloaded: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "[media-ipc] Downloaded %s -> %s\n", msgID, targetPath)
 	return nil
 }
 
