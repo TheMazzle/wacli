@@ -15,13 +15,19 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
-// refreshAvatars fetches profile pictures for contacts and groups,
-// prioritized by most recent activity. Uses ExistingID for change detection
-// to avoid redundant downloads.
+// refreshAvatars fetches profile pictures for all contacts (including @lid)
+// and groups. Groups come from chats, contacts from the contacts table.
+// Uses ExistingID for change detection to avoid redundant downloads.
 func (a *App) refreshAvatars(ctx context.Context) error {
+	// Collect all JIDs to check: groups from chats + all contacts
 	chats, err := a.db.ListChatsWithMessages()
 	if err != nil {
 		return fmt.Errorf("list chats: %w", err)
+	}
+
+	contactJIDs, err := a.db.ListAllContactJIDs()
+	if err != nil {
+		return fmt.Errorf("list contacts: %w", err)
 	}
 
 	existing, err := a.db.GetAvatarIDs()
@@ -34,11 +40,32 @@ func (a *App) refreshAvatars(ctx context.Context) error {
 		return fmt.Errorf("create avatar dir: %w", err)
 	}
 
-	const maxFetches = 200
-	const fetchDelay = 200 * time.Millisecond
+	// Build deduplicated list: groups first (from chats), then all contacts
+	seen := make(map[string]bool)
+	var jidStrs []string
+	for _, chat := range chats {
+		if strings.HasSuffix(chat.JID, "@g.us") && !seen[chat.JID] {
+			seen[chat.JID] = true
+			jidStrs = append(jidStrs, chat.JID)
+		}
+	}
+	for _, jidStr := range contactJIDs {
+		// Skip @lid JIDs — GetProfilePictureInfo doesn't work for LID format.
+		// These will be resolved via LID→PN mapping instead.
+		if strings.HasSuffix(jidStr, "@lid") {
+			continue
+		}
+		if !seen[jidStr] {
+			seen[jidStr] = true
+			jidStrs = append(jidStrs, jidStr)
+		}
+	}
+
+	const maxFetches = 300
+	const fetchDelay = 250 * time.Millisecond
 	fetched := 0
 
-	for _, chat := range chats {
+	for _, jidStr := range jidStrs {
 		if ctx.Err() != nil {
 			break
 		}
@@ -46,12 +73,12 @@ func (a *App) refreshAvatars(ctx context.Context) error {
 			break
 		}
 
-		jid, err := types.ParseJID(chat.JID)
+		jid, err := types.ParseJID(jidStr)
 		if err != nil {
 			continue
 		}
 
-		existingID := existing[chat.JID]
+		existingID := existing[jidStr]
 		params := &whatsmeow.GetProfilePictureParams{
 			ExistingID: existingID,
 		}
@@ -69,17 +96,17 @@ func (a *App) refreshAvatars(ctx context.Context) error {
 		}
 
 		// Download the picture
-		filename := chat.JID + ".jpg"
+		filename := jidStr + ".jpg"
 		destPath := filepath.Join(avatarDir, filename)
 		if err := downloadToFile(info.URL, destPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[avatars] %s: download failed: %v\n", chat.JID, err)
+			fmt.Fprintf(os.Stderr, "[avatars] %s: download failed: %v\n", jidStr, err)
 			fetched++
 			continue
 		}
 
 		// Store relative path (avatars/{jid}.jpg) so whatslack can resolve against storeDir
 		relPath := filepath.Join("avatars", filename)
-		_ = a.db.UpsertAvatar(chat.JID, info.ID, relPath)
+		_ = a.db.UpsertAvatar(jidStr, info.ID, relPath)
 		fetched++
 
 		select {

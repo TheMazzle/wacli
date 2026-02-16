@@ -1436,6 +1436,25 @@ func (d *DB) GetAvatarIDs() (map[string]string, error) {
 	return out, nil
 }
 
+// ListAllContactJIDs returns all JIDs from the contacts table.
+// This includes @s.whatsapp.net, @lid, and other formats.
+func (d *DB) ListAllContactJIDs() ([]string, error) {
+	rows, err := d.sql.Query(`SELECT jid FROM contacts`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var jid string
+		if err := rows.Scan(&jid); err != nil {
+			return nil, err
+		}
+		out = append(out, jid)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) HasFTS() bool { return d.ftsEnabled }
 
 func IsNotFound(err error) bool {
