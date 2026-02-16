@@ -363,6 +363,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 		ReactionEmoji:   pm.ReactionEmoji,
 		ReplyToMsgID:    pm.ReplyToID,
 		MsgOrderID:      pm.MsgOrderID,
+		IsLive:          pm.IsLive,
 	})
 }
 

@@ -171,6 +171,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureIsLiveColumn(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -263,6 +267,20 @@ func (d *DB) ensureMsgOrderIDColumn() error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN msg_order_id INTEGER`); err != nil {
 		return fmt.Errorf("add msg_order_id column: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureIsLiveColumn() error {
+	ok, err := d.tableHasColumn("messages", "is_live")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN is_live INTEGER`); err != nil {
+		return fmt.Errorf("add is_live column: %w", err)
 	}
 	return nil
 }
@@ -517,6 +535,7 @@ type UpsertMessageParams struct {
 	ReactionEmoji   string
 	ReplyToMsgID    string
 	MsgOrderID      *uint64
+	IsLive          bool
 }
 
 func (d *DB) UpsertMessage(p UpsertMessageParams) error {
@@ -529,8 +548,8 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text,
 			media_type, media_caption, filename, mime_type, direct_path,
 			media_key, file_sha256, file_enc_sha256, file_length,
-			reaction_to_msg_id, reaction_emoji, reply_to_msg_id, msg_order_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			reaction_to_msg_id, reaction_emoji, reply_to_msg_id, msg_order_id, is_live
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_jid, msg_id) DO UPDATE SET
 			chat_name=COALESCE(NULLIF(excluded.chat_name,''), messages.chat_name),
 			sender_jid=excluded.sender_jid,
@@ -551,12 +570,13 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			reaction_to_msg_id=COALESCE(NULLIF(excluded.reaction_to_msg_id,''), messages.reaction_to_msg_id),
 			reaction_emoji=COALESCE(NULLIF(excluded.reaction_emoji,''), messages.reaction_emoji),
 			reply_to_msg_id=COALESCE(NULLIF(excluded.reply_to_msg_id,''), messages.reply_to_msg_id),
-			msg_order_id=COALESCE(excluded.msg_order_id, messages.msg_order_id)
+			msg_order_id=COALESCE(excluded.msg_order_id, messages.msg_order_id),
+			is_live=COALESCE(excluded.is_live, messages.is_live)
 	`, p.ChatJID, nullIfEmpty(p.ChatName), p.MsgID, nullIfEmpty(p.SenderJID), nullIfEmpty(p.SenderName), unix(p.Timestamp), boolToInt(p.FromMe), nullIfEmpty(p.Text), nullIfEmpty(p.DisplayText),
 		nullIfEmpty(p.MediaType), nullIfEmpty(p.MediaCaption), nullIfEmpty(p.Filename), nullIfEmpty(p.MimeType), nullIfEmpty(p.DirectPath),
 		p.MediaKey, p.FileSHA256, p.FileEncSHA256, int64(p.FileLength),
 		nullIfEmpty(p.ReactionToMsgID), nullIfEmpty(p.ReactionEmoji), nullIfEmpty(p.ReplyToMsgID),
-		msgOrderID,
+		msgOrderID, boolToInt(p.IsLive),
 	)
 	return err
 }
@@ -1173,7 +1193,7 @@ type Gap struct {
 func (d *DB) DetectGaps(chatJID string, minGapSecs int64) ([]Gap, error) {
 	rows, err := d.sql.Query(`
 		SELECT ts, msg_order_id FROM messages
-		WHERE chat_jid = ?
+		WHERE chat_jid = ? AND (is_live = 0 OR is_live IS NULL)
 		ORDER BY ts ASC
 	`, chatJID)
 	if err != nil {

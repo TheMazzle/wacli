@@ -35,6 +35,7 @@ type ParsedMessage struct {
 	ReactionToID   string
 	ReactionEmoji  string
 	MsgOrderID     *uint64
+	IsLive         bool
 }
 
 func ParseLiveMessage(evt *events.Message) ParsedMessage {
@@ -44,6 +45,7 @@ func ParseLiveMessage(evt *events.Message) ParsedMessage {
 		Timestamp: evt.Info.Timestamp,
 		FromMe:    evt.Info.IsFromMe,
 		PushName:  evt.Info.PushName,
+		IsLive:    true,
 	}
 	if s := evt.Info.Sender.String(); s != "" {
 		msg.SenderJID = s
