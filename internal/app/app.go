@@ -37,6 +37,8 @@ type WAClient interface {
 	JoinGroupWithLink(ctx context.Context, code string) (types.JID, error)
 	LeaveGroup(ctx context.Context, group types.JID) error
 
+	GetProfilePictureInfo(ctx context.Context, jid types.JID, params *whatsmeow.GetProfilePictureParams) (*types.ProfilePictureInfo, error)
+
 	SendText(ctx context.Context, to types.JID, text string) (types.MessageID, error)
 	SendProtoMessage(ctx context.Context, to types.JID, msg *waProto.Message) (types.MessageID, error)
 	Upload(ctx context.Context, data []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error)

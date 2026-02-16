@@ -262,6 +262,16 @@ func IsGroupJID(jid types.JID) bool {
 	return jid.Server == types.GroupServer
 }
 
+func (c *Client) GetProfilePictureInfo(ctx context.Context, jid types.JID, params *whatsmeow.GetProfilePictureParams) (*types.ProfilePictureInfo, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return nil, fmt.Errorf("not connected")
+	}
+	return cli.GetProfilePictureInfo(ctx, jid, params)
+}
+
 func (c *Client) GetContact(ctx context.Context, jid types.JID) (types.ContactInfo, error) {
 	c.mu.Lock()
 	cli := c.client

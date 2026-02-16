@@ -227,6 +227,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	var downloadMedia bool
 	var refreshContacts bool
 	var refreshGroups bool
+	var refreshAvatars bool
 	var enableIPC bool
 	var backfillGaps bool
 
@@ -274,6 +275,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 				DownloadMedia:   downloadMedia,
 				RefreshContacts: refreshContacts,
 				RefreshGroups:   refreshGroups,
+				RefreshAvatars:  refreshAvatars,
 				BackfillGaps:    backfillGaps,
 				IdleExit:        idleExit,
 			})
@@ -299,6 +301,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&refreshContacts, "refresh-contacts", false, "refresh contacts from session store into local DB")
 	cmd.Flags().BoolVar(&refreshGroups, "refresh-groups", false, "refresh joined groups (live) into local DB")
 	cmd.Flags().BoolVar(&enableIPC, "enable-ipc", true, "enable IPC socket for send commands (--follow mode only)")
+	cmd.Flags().BoolVar(&refreshAvatars, "refresh-avatars", true, "fetch profile pictures for contacts and groups on connect")
 	cmd.Flags().BoolVar(&backfillGaps, "backfill-gaps", true, "detect and backfill message gaps on connect and reconnect (requires phone online)")
 	return cmd
 }

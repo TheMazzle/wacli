@@ -116,6 +116,10 @@ func (f *fakeWA) ResolveChatName(ctx context.Context, chat types.JID, pushName s
 	return chat.String()
 }
 
+func (f *fakeWA) GetProfilePictureInfo(ctx context.Context, jid types.JID, params *whatsmeow.GetProfilePictureParams) (*types.ProfilePictureInfo, error) {
+	return nil, nil
+}
+
 func (f *fakeWA) GetContact(ctx context.Context, jid types.JID) (types.ContactInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

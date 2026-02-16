@@ -179,6 +179,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureAvatarColumns(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -299,6 +303,29 @@ func (d *DB) ensureEventTypeColumn() error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN event_type TEXT DEFAULT 'message'`); err != nil {
 		return fmt.Errorf("add event_type column: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureAvatarColumns() error {
+	ok, err := d.tableHasColumn("contacts", "avatar_id")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE contacts ADD COLUMN avatar_id TEXT`); err != nil {
+		return fmt.Errorf("add contacts avatar_id column: %w", err)
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE contacts ADD COLUMN avatar_path TEXT`); err != nil {
+		return fmt.Errorf("add contacts avatar_path column: %w", err)
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE groups ADD COLUMN avatar_id TEXT`); err != nil {
+		return fmt.Errorf("add groups avatar_id column: %w", err)
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE groups ADD COLUMN avatar_path TEXT`); err != nil {
+		return fmt.Errorf("add groups avatar_path column: %w", err)
 	}
 	return nil
 }
@@ -1368,6 +1395,45 @@ func (d *DB) GetRecentUnreadMessages(chatJID string, limit int) ([]RecentUnreadM
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// UpsertAvatar updates the avatar_id and avatar_path for a contact or group.
+// Determines the target table based on JID suffix: @g.us → groups, otherwise → contacts.
+func (d *DB) UpsertAvatar(jid, avatarID, avatarPath string) error {
+	table := "contacts"
+	if strings.HasSuffix(jid, "@g.us") {
+		table = "groups"
+	}
+	_, err := d.sql.Exec(
+		`UPDATE `+table+` SET avatar_id = ?, avatar_path = ? WHERE jid = ?`,
+		nullIfEmpty(avatarID), nullIfEmpty(avatarPath), jid,
+	)
+	return err
+}
+
+// GetAvatarIDs returns a map of JID → avatar_id for all contacts and groups
+// that have an avatar_id set. Used for change detection during avatar sync.
+func (d *DB) GetAvatarIDs() (map[string]string, error) {
+	out := make(map[string]string)
+	for _, table := range []string{"contacts", "groups"} {
+		rows, err := d.sql.Query(`SELECT jid, avatar_id FROM ` + table + ` WHERE avatar_id IS NOT NULL AND avatar_id != ''`)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var jid, aid string
+			if err := rows.Scan(&jid, &aid); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[jid] = aid
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func (d *DB) HasFTS() bool { return d.ftsEnabled }

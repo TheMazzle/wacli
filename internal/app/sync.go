@@ -31,6 +31,7 @@ type SyncOptions struct {
 	RefreshContacts bool
 	RefreshGroups   bool
 	BackfillGaps    bool          // auto-detect and backfill sync gaps on connect
+	RefreshAvatars  bool          // fetch profile pictures on connect
 	IdleExit        time.Duration // only used for bootstrap/once
 	Verbosity       int           // future
 }
@@ -146,6 +147,8 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 			}
 		case *events.GroupInfo:
 			a.storeGroupInfoEvent(ctx, v)
+		case *events.Picture:
+			go a.handlePictureUpdate(ctx, v)
 		case *events.Connected:
 			fmt.Fprintln(os.Stderr, "\nConnected.")
 		case *events.Disconnected:
@@ -177,6 +180,9 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	}
 	if opts.RefreshGroups {
 		_ = a.refreshGroups(ctx)
+	}
+	if opts.RefreshAvatars {
+		_ = a.refreshAvatars(ctx)
 	}
 	if opts.AfterConnect != nil {
 		if err := opts.AfterConnect(ctx); err != nil {
