@@ -20,7 +20,7 @@ const (
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "ping"
+	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "ping"
 	To           string `json:"to,omitempty"`
 	Message      string `json:"message,omitempty"`
 	File         string `json:"file,omitempty"`
@@ -32,6 +32,7 @@ type Request struct {
 	ReplyToMsgID string `json:"reply_to_msg_id,omitempty"`   // for send_text: reply to a specific message
 	Emoji        string `json:"emoji,omitempty"`             // for send_reaction: the emoji to react with (empty = remove)
 	FromMe       bool   `json:"from_me,omitempty"`           // for send_reaction: whether the target message is from the sender
+	ForwardText  string `json:"forward_text,omitempty"`      // for forward_message: text content to forward
 }
 
 // Response represents the result from the sync daemon.
@@ -51,6 +52,7 @@ type SendTextResult struct {
 type Handler interface {
 	SendText(to, message, replyToMsgID string) (msgID string, err error)
 	SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error
+	ForwardText(to, text string) (msgID string, err error)
 	MarkRead(chatJID string) error
 	RequestBackfill(chatJID string, beforeTS int64, count int) error
 	DownloadMedia(chatJID, msgID string) error
@@ -186,6 +188,16 @@ func (s *Server) processRequest(req Request) Response {
 		}
 		return Response{Success: true, Data: map[string]string{"chat_jid": req.ChatJID, "msg_id": req.MsgID, "emoji": req.Emoji}}
 	
+	case "forward_message":
+		if req.To == "" || req.ForwardText == "" {
+			return Response{Success: false, Error: "to and forward_text are required"}
+		}
+		msgID, err := s.handler.ForwardText(req.To, req.ForwardText)
+		if err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
 	case "mark_read":
 		if req.ChatJID == "" {
 			return Response{Success: false, Error: "chat_jid is required"}

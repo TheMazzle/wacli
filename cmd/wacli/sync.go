@@ -15,7 +15,9 @@ import (
 	"github.com/steipete/wacli/internal/out"
 	"github.com/steipete/wacli/internal/store"
 	"github.com/steipete/wacli/internal/wa"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
+	"google.golang.org/protobuf/proto"
 )
 
 // syncHandler implements ipc.Handler for the sync daemon.
@@ -112,6 +114,60 @@ func (h *syncHandler) SendReaction(chatJID, msgID, emoji string, targetFromMe bo
 	})
 
 	return nil
+}
+
+func (h *syncHandler) ForwardText(to, text string) (string, error) {
+	if h.app == nil {
+		return "", fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return "", fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return "", fmt.Errorf("whatsapp not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	toJID, err := wa.ParseUserOrJID(to)
+	if err != nil {
+		return "", fmt.Errorf("parse recipient: %w", err)
+	}
+
+	msg := &waProto.Message{
+		ExtendedTextMessage: &waProto.ExtendedTextMessage{
+			Text: proto.String(text),
+			ContextInfo: &waProto.ContextInfo{
+				IsForwarded:     proto.Bool(true),
+				ForwardingScore: proto.Uint32(1),
+			},
+		},
+	}
+
+	msgID, err := h.app.WA().SendProtoMessage(ctx, toJID, msg)
+	if err != nil {
+		return "", fmt.Errorf("forward: %w", err)
+	}
+
+	now := time.Now().UTC()
+	chatName := h.app.WA().ResolveChatName(ctx, toJID, "")
+	kind := chatKindFromJID(toJID)
+	_ = h.app.DB().UpsertChat(toJID.String(), kind, chatName, now)
+	_ = h.app.DB().UpsertMessage(store.UpsertMessageParams{
+		ChatJID:         toJID.String(),
+		ChatName:        chatName,
+		MsgID:           string(msgID),
+		SenderJID:       "",
+		SenderName:      "me",
+		Timestamp:       now,
+		FromMe:          true,
+		Text:            text,
+		IsForwarded:     true,
+		ForwardingScore: 1,
+	})
+
+	return string(msgID), nil
 }
 
 func (h *syncHandler) MarkRead(chatJID string) error {
