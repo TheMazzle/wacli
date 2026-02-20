@@ -211,6 +211,9 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) {
 				pm.Text = "Message edited"
 			case waProto.ProtocolMessage_REVOKE:
 				pm.Text = "Message deleted"
+				if key := proto.GetKey(); key != nil {
+					pm.ReplyToID = key.GetID()
+				}
 			case waProto.ProtocolMessage_EPHEMERAL_SETTING:
 				dur := proto.GetEphemeralExpiration()
 				if dur == 0 {
