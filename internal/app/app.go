@@ -49,6 +49,7 @@ type WAClient interface {
 	DecryptReaction(ctx context.Context, reaction *events.Message) (*waProto.ReactionMessage, error)
 	RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error)
 	MarkRead(ctx context.Context, ids []types.MessageID, timestamp time.Time, chat types.JID, sender types.JID) error
+	ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID
 	Logout(ctx context.Context) error
 }
 

@@ -260,6 +260,10 @@ func (f *fakeWA) MarkRead(ctx context.Context, ids []types.MessageID, timestamp 
 	return nil
 }
 
+func (f *fakeWA) ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID {
+	return jid // fake: return as-is
+}
+
 func (f *fakeWA) Logout(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

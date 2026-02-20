@@ -141,9 +141,20 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 			// Track read state: ReceiptTypeReadSelf = we read on another device (e.g. phone),
 			// ReceiptTypeRead = someone else read our message.
 			if v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypeReadSelf {
-				chatJID := v.Chat.ToNonAD().String()
+				chatJID := v.Chat.ToNonAD()
+				// Resolve @lid → @s.whatsapp.net for DM receipts
+				chatJID = a.wa.ResolveLIDToPN(ctx, chatJID)
 				readTS := v.Timestamp.UTC().Unix()
-				_ = a.db.UpdateReadTS(chatJID, readTS)
+				_ = a.db.UpdateReadTS(chatJID.String(), readTS)
+			}
+		case *events.MarkChatAsRead:
+			// Fired when another device (phone) marks a chat as read via app-state sync.
+			// This is the primary mechanism for "read on phone → update here".
+			if v.Action != nil && v.Action.GetRead() {
+				chatJID := v.JID.ToNonAD()
+				chatJID = a.wa.ResolveLIDToPN(ctx, chatJID)
+				readTS := v.Timestamp.UTC().Unix()
+				_ = a.db.UpdateReadTS(chatJID.String(), readTS)
 			}
 		case *events.GroupInfo:
 			a.storeGroupInfoEvent(ctx, v)

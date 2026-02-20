@@ -409,6 +409,26 @@ func (c *Client) MarkRead(ctx context.Context, ids []types.MessageID, timestamp 
 	return cli.MarkRead(ctx, ids, timestamp, chat, sender)
 }
 
+// ResolveLIDToPN converts a @lid JID to a @s.whatsapp.net JID using whatsmeow's
+// built-in LID mapping cache. Returns the original JID unchanged if it's not a LID
+// or if the mapping is not found.
+func (c *Client) ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID {
+	if jid.Server != types.HiddenUserServer {
+		return jid
+	}
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || cli.Store == nil || cli.Store.LIDs == nil {
+		return jid
+	}
+	pn, err := cli.Store.LIDs.GetPNForLID(ctx, jid)
+	if err != nil || pn.IsEmpty() {
+		return jid
+	}
+	return pn
+}
+
 func (c *Client) Logout(ctx context.Context) error {
 	c.mu.Lock()
 	cli := c.client
