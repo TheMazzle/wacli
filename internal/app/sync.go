@@ -384,6 +384,8 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 		MsgOrderID:      pm.MsgOrderID,
 		IsLive:          pm.IsLive,
 		EventType:       pm.EventType,
+		IsForwarded:     pm.IsForwarded,
+		ForwardingScore: pm.ForwardingScore,
 	})
 }
 

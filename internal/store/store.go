@@ -183,6 +183,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureForwardedColumns(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -303,6 +307,23 @@ func (d *DB) ensureEventTypeColumn() error {
 	}
 	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN event_type TEXT DEFAULT 'message'`); err != nil {
 		return fmt.Errorf("add event_type column: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ensureForwardedColumns() error {
+	ok, err := d.tableHasColumn("messages", "is_forwarded")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN is_forwarded INTEGER DEFAULT 0`); err != nil {
+		return fmt.Errorf("add is_forwarded column: %w", err)
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE messages ADD COLUMN forwarding_score INTEGER DEFAULT 0`); err != nil {
+		return fmt.Errorf("add forwarding_score column: %w", err)
 	}
 	return nil
 }
@@ -582,6 +603,8 @@ type UpsertMessageParams struct {
 	MsgOrderID      *uint64
 	IsLive          bool
 	EventType       string // "message" (default) or "system"
+	IsForwarded     bool
+	ForwardingScore uint32
 }
 
 func (d *DB) UpsertMessage(p UpsertMessageParams) error {
@@ -598,8 +621,9 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text,
 			media_type, media_caption, filename, mime_type, direct_path,
 			media_key, file_sha256, file_enc_sha256, file_length,
-			reaction_to_msg_id, reaction_emoji, reply_to_msg_id, msg_order_id, is_live, event_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			reaction_to_msg_id, reaction_emoji, reply_to_msg_id, msg_order_id, is_live, event_type,
+			is_forwarded, forwarding_score
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_jid, msg_id) DO UPDATE SET
 			chat_name=COALESCE(NULLIF(excluded.chat_name,''), messages.chat_name),
 			sender_jid=excluded.sender_jid,
@@ -622,12 +646,15 @@ func (d *DB) UpsertMessage(p UpsertMessageParams) error {
 			reply_to_msg_id=COALESCE(NULLIF(excluded.reply_to_msg_id,''), messages.reply_to_msg_id),
 			msg_order_id=COALESCE(excluded.msg_order_id, messages.msg_order_id),
 			is_live=COALESCE(excluded.is_live, messages.is_live),
-			event_type=COALESCE(NULLIF(excluded.event_type,'message'), messages.event_type)
+			event_type=COALESCE(NULLIF(excluded.event_type,'message'), messages.event_type),
+			is_forwarded=CASE WHEN excluded.is_forwarded>0 THEN excluded.is_forwarded ELSE messages.is_forwarded END,
+			forwarding_score=CASE WHEN excluded.forwarding_score>0 THEN excluded.forwarding_score ELSE messages.forwarding_score END
 	`, p.ChatJID, nullIfEmpty(p.ChatName), p.MsgID, nullIfEmpty(p.SenderJID), nullIfEmpty(p.SenderName), unix(p.Timestamp), boolToInt(p.FromMe), nullIfEmpty(p.Text), nullIfEmpty(p.DisplayText),
 		nullIfEmpty(p.MediaType), nullIfEmpty(p.MediaCaption), nullIfEmpty(p.Filename), nullIfEmpty(p.MimeType), nullIfEmpty(p.DirectPath),
 		p.MediaKey, p.FileSHA256, p.FileEncSHA256, int64(p.FileLength),
 		nullIfEmpty(p.ReactionToMsgID), nullIfEmpty(p.ReactionEmoji), nullIfEmpty(p.ReplyToMsgID),
 		msgOrderID, boolToInt(p.IsLive), eventType,
+		boolToInt(p.IsForwarded), int64(p.ForwardingScore),
 	)
 	return err
 }

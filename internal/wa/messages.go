@@ -34,9 +34,11 @@ type ParsedMessage struct {
 	ReplyToDisplay string
 	ReactionToID   string
 	ReactionEmoji  string
-	MsgOrderID     *uint64
-	IsLive         bool
-	EventType      string // "message" (default), "system"
+	MsgOrderID      *uint64
+	IsLive          bool
+	EventType       string // "message" (default), "system"
+	IsForwarded     bool
+	ForwardingScore uint32
 }
 
 func ParseLiveMessage(evt *events.Message) ParsedMessage {
@@ -198,6 +200,10 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) {
 		}
 		if quoted := ctx.GetQuotedMessage(); quoted != nil {
 			pm.ReplyToDisplay = strings.TrimSpace(displayTextForProto(quoted))
+		}
+		if ctx.GetIsForwarded() {
+			pm.IsForwarded = true
+			pm.ForwardingScore = ctx.GetForwardingScore()
 		}
 	}
 
