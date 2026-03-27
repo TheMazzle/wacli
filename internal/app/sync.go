@@ -219,8 +219,11 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 					return SyncResult{MessagesStored: messagesStored.Load()}, err
 				}
 				fmt.Fprintln(os.Stderr, "Reconnected.")
-				if opts.BackfillGaps {
+				if opts.BackfillGaps && a.shouldBackfillGaps() {
 					go a.backfillDetectedGaps(ctx)
+				} else if opts.BackfillGaps {
+					fmt.Fprintf(os.Stderr, "[backfill] Skipping gap detection (cooldown, last run %s ago)\n",
+						time.Since(time.Unix(0, a.lastGapBackfill.Load())).Truncate(time.Minute))
 				}
 			}
 		}
@@ -244,8 +247,11 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 				return SyncResult{MessagesStored: messagesStored.Load()}, err
 			}
 			fmt.Fprintln(os.Stderr, "Reconnected.")
-			if opts.BackfillGaps {
+			if opts.BackfillGaps && a.shouldBackfillGaps() {
 				go a.backfillDetectedGaps(ctx)
+			} else if opts.BackfillGaps {
+				fmt.Fprintf(os.Stderr, "[backfill] Skipping gap detection (cooldown, last run %s ago)\n",
+					time.Since(time.Unix(0, a.lastGapBackfill.Load())).Truncate(time.Minute))
 			}
 		case <-ticker.C:
 			last := time.Unix(0, lastEvent.Load())
@@ -567,6 +573,17 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 		}
 		fmt.Fprintln(os.Stderr, " Responses arrive via history sync events (best-effort).")
 	}
+	a.lastGapBackfill.Store(time.Now().UnixNano())
+}
+
+const gapBackfillCooldown = 6 * time.Hour
+
+func (a *App) shouldBackfillGaps() bool {
+	last := a.lastGapBackfill.Load()
+	if last == 0 {
+		return true
+	}
+	return time.Since(time.Unix(0, last)) >= gapBackfillCooldown
 }
 
 // storeGroupInfoEvent converts a whatsmeow GroupInfo event (name change,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/steipete/wacli/internal/store"
@@ -61,9 +62,10 @@ type Options struct {
 }
 
 type App struct {
-	opts Options
-	wa   WAClient
-	db   *store.DB
+	opts            Options
+	wa              WAClient
+	db              *store.DB
+	lastGapBackfill atomic.Int64 // UnixNano of last backfillDetectedGaps run
 }
 
 func New(opts Options) (*App, error) {
