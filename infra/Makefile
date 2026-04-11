@@ -1,17 +1,29 @@
 # wacli fork infrastructure
 # Source of truth: ~/Projects/wacli/infra/
 # Pattern: bjorn-de-borg infra (copy, not symlink)
+#
+# Targets:
+#   Mac Mini (wacli daemon):  install, uninstall, reinstall, status, logs, build
+#   MacBook (sync + tunnel):  install-sync, install-tunnel, uninstall-sync, uninstall-tunnel
+#   Mode toggle:              mode-primary, mode-fallback, mode-status
 
 LABEL = com.productfunction.wacli
+LABEL_SYNC = com.productfunction.wacli-sync
+LABEL_TUNNEL = com.productfunction.wacli-tunnel
 UID := $(shell id -u)
+LOG_DIR = $(HOME)/Library/Logs/Whatslack
+
+# === Daemon (Mac Mini) ===
+
 PLIST_SRC = launchagents/$(LABEL).plist
 PLIST_DST = $(HOME)/Library/LaunchAgents/$(LABEL).plist
 SCRIPT_SRC = scripts/wacli-sync.sh
 SCRIPT_DST = $(HOME)/bin/wacli-sync.sh
-LOG_DIR = $(HOME)/Library/Logs/Whatslack
 LOG_FILE = $(LOG_DIR)/wacli-sync.log
 
 .PHONY: install uninstall reinstall status logs build
+.PHONY: install-sync uninstall-sync install-tunnel uninstall-tunnel
+.PHONY: mode-primary mode-fallback mode-status
 
 install: $(LOG_DIR)
 	@echo "==> Installing wacli-sync script..."
@@ -60,3 +72,79 @@ build:
 	@echo "==> Running tests..."
 	cd .. && go test -tags sqlite_fts5 ./...
 	@echo "==> Done. Binary: ~/bin/wacli"
+
+# === DB Sync (MacBook) ===
+
+SYNC_PLIST_SRC = launchagents/$(LABEL_SYNC).plist
+SYNC_PLIST_DST = $(HOME)/Library/LaunchAgents/$(LABEL_SYNC).plist
+SYNC_SCRIPT_SRC = scripts/wacli-db-sync.sh
+SYNC_SCRIPT_DST = $(HOME)/bin/wacli-db-sync.sh
+
+install-sync: $(LOG_DIR)
+	@echo "==> Installing wacli-db-sync script..."
+	cp $(SYNC_SCRIPT_SRC) $(SYNC_SCRIPT_DST)
+	chmod +x $(SYNC_SCRIPT_DST)
+	@echo "==> Installing DB sync LaunchAgent..."
+	cp $(SYNC_PLIST_SRC) $(SYNC_PLIST_DST)
+	launchctl bootstrap gui/$(UID) $(SYNC_PLIST_DST)
+	@echo "==> Done. DB sync active (every 30s)."
+
+uninstall-sync:
+	@echo "==> Stopping DB sync..."
+	-launchctl bootout gui/$(UID)/$(LABEL_SYNC) 2>/dev/null
+	-rm -f $(SYNC_PLIST_DST)
+	-rm -f $(SYNC_SCRIPT_DST)
+	@echo "==> Done."
+
+# === IPC Socket Tunnel (MacBook) ===
+
+TUNNEL_PLIST_SRC = launchagents/$(LABEL_TUNNEL).plist
+TUNNEL_PLIST_DST = $(HOME)/Library/LaunchAgents/$(LABEL_TUNNEL).plist
+TUNNEL_SCRIPT_SRC = scripts/wacli-tunnel.sh
+TUNNEL_SCRIPT_DST = $(HOME)/bin/wacli-tunnel.sh
+
+install-tunnel: $(LOG_DIR)
+	@echo "==> Installing wacli-tunnel script..."
+	cp $(TUNNEL_SCRIPT_SRC) $(TUNNEL_SCRIPT_DST)
+	chmod +x $(TUNNEL_SCRIPT_DST)
+	@echo "==> Installing tunnel LaunchAgent..."
+	cp $(TUNNEL_PLIST_SRC) $(TUNNEL_PLIST_DST)
+	launchctl bootstrap gui/$(UID) $(TUNNEL_PLIST_DST)
+	@echo "==> Done. SSH socket tunnel active."
+
+uninstall-tunnel:
+	@echo "==> Stopping tunnel..."
+	-launchctl bootout gui/$(UID)/$(LABEL_TUNNEL) 2>/dev/null
+	-rm -f $(TUNNEL_PLIST_DST)
+	-rm -f $(TUNNEL_SCRIPT_DST)
+	-rm -f $(HOME)/.wacli/wacli.sock
+	@echo "==> Done."
+
+# === Mode Toggle (MacBook) ===
+
+MODE_SCRIPT_SRC = scripts/wacli-mode.sh
+MODE_SCRIPT_DST = $(HOME)/bin/wacli-mode.sh
+
+install-mode: $(LOG_DIR)
+	@echo "==> Installing mode toggle script..."
+	cp $(MODE_SCRIPT_SRC) $(MODE_SCRIPT_DST)
+	chmod +x $(MODE_SCRIPT_DST)
+	@echo "==> Done. Use: wacli-mode.sh {primary|fallback|status}"
+
+mode-primary:
+	$(MODE_SCRIPT_DST) primary
+
+mode-fallback:
+	$(MODE_SCRIPT_DST) fallback
+
+mode-status:
+	$(MODE_SCRIPT_DST) status
+
+# === MacBook Full Setup (sync + tunnel + mode) ===
+
+install-macbook: install-sync install-tunnel install-mode
+	@echo "==> MacBook setup complete (sync + tunnel + mode toggle)."
+
+uninstall-macbook: uninstall-sync uninstall-tunnel
+	-rm -f $(MODE_SCRIPT_DST)
+	@echo "==> MacBook cleanup complete."
