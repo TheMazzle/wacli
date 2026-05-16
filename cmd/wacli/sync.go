@@ -298,12 +298,8 @@ func (h *syncHandler) DownloadMedia(chatJID, msgID string) error {
 		return fmt.Errorf("get media info: %w", err)
 	}
 
-	if info.LocalPath != "" {
-		if _, err := os.Stat(info.LocalPath); err == nil {
-			return nil // already downloaded and file exists
-		}
-		// LocalPath is set but file is missing (e.g. downloaded on another machine);
-		// fall through to re-download.
+	if mediaFileExists(info.LocalPath) {
+		return nil // already downloaded and file exists on this machine
 	}
 
 	targetPath, err := h.app.ResolveMediaOutputPath(info, "")
@@ -411,4 +407,14 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&refreshAvatars, "refresh-avatars", true, "fetch profile pictures for contacts and groups on connect")
 	cmd.Flags().BoolVar(&backfillGaps, "backfill-gaps", true, "detect and backfill message gaps on connect and reconnect (requires phone online)")
 	return cmd
+}
+
+// mediaFileExists reports whether localPath is non-empty and the file exists on disk.
+// A non-empty path that doesn't exist (e.g. downloaded on another machine) returns false.
+func mediaFileExists(localPath string) bool {
+	if localPath == "" {
+		return false
+	}
+	_, err := os.Stat(localPath)
+	return err == nil
 }
