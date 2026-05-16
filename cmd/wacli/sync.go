@@ -299,7 +299,11 @@ func (h *syncHandler) DownloadMedia(chatJID, msgID string) error {
 	}
 
 	if info.LocalPath != "" {
-		return nil // already downloaded
+		if _, err := os.Stat(info.LocalPath); err == nil {
+			return nil // already downloaded and file exists
+		}
+		// LocalPath is set but file is missing (e.g. downloaded on another machine);
+		// fall through to re-download.
 	}
 
 	targetPath, err := h.app.ResolveMediaOutputPath(info, "")
