@@ -42,3 +42,5 @@ go.work.sum
 
 # pnpm build output
 /dist/
+.DS_Store
+.claude/
