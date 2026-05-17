@@ -72,6 +72,7 @@ wacli draait alleen op Mac Mini. MacBook krijgt data via SSH sync:
 - **Media sync:** rsync `~/.wacli/media/` (exclusief `status_broadcast/`) → MacBook `~/.wacli/media/`
 - **Installeren/updaten op MacBook:** `scp macmini:~/Projects/wacli/infra/scripts/wacli-db-sync.sh ~/bin/wacli-db-sync.sh`
 - **IPC commando's** (send, react, download) werken via de tunnel vanuit MacBook naar Mac Mini's socket
+- **Let op:** als images niet renderen op MacBook, check eerst of `~/.wacli/media/` gesynchroniseerd is — `local_path` in DB wijst naar Mac Mini paden. DB sync ≠ media sync. (date: 2026-05-17)
 
 ## Conventions
 - Go code style: standaard gofmt
