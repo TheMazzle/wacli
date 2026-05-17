@@ -64,6 +64,15 @@ lsof ~/.wacli/wacli.sock    # Process moet actief zijn
 - **Ownership:** wacli is eigenaar, whatslack leest read-only
 - **File watcher:** whatslack detecteert changes via notify crate op `~/.wacli/`
 
+### MacBook sync (geen wacli daemon op MacBook)
+wacli draait alleen op Mac Mini. MacBook krijgt data via SSH sync:
+
+- **Script:** `infra/scripts/wacli-db-sync.sh` — draait als LaunchAgent op MacBook (elke 30s)
+- **DB sync:** `sqlite3 wacli.db ".backup wacli-export.db"` op Mac Mini → rsync naar MacBook `~/.wacli/wacli.db`
+- **Media sync:** rsync `~/.wacli/media/` (exclusief `status_broadcast/`) → MacBook `~/.wacli/media/`
+- **Installeren/updaten op MacBook:** `scp macmini:~/Projects/wacli/infra/scripts/wacli-db-sync.sh ~/bin/wacli-db-sync.sh`
+- **IPC commando's** (send, react, download) werken via de tunnel vanuit MacBook naar Mac Mini's socket
+
 ## Conventions
 - Go code style: standaard gofmt
 - Error handling: wrap met `fmt.Errorf("context: %w", err)`
