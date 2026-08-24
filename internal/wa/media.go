@@ -3,7 +3,6 @@ package wa
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,12 +59,11 @@ func (c *Client) DownloadMediaToFile(ctx context.Context, directPath string, enc
 		}
 	}()
 
-	length := -1
-	if fileLength > 0 && fileLength < math.MaxInt32 {
-		length = int(fileLength)
-	}
+	// whatsmeow dropped the fileLength argument in 2026-08; fileLength is kept in
+	// this wrapper's signature for callers but is no longer passed downstream.
+	_ = fileLength
 
-	if err := cli.DownloadMediaWithPathToFile(ctx, directPath, encFileHash, fileHash, mediaKey, length, mt, mmsType, tmpFile); err != nil {
+	if err := cli.DownloadMediaWithPathToFile(ctx, directPath, encFileHash, fileHash, mediaKey, mt, mmsType, false, tmpFile); err != nil {
 		return 0, err
 	}
 	if err := tmpFile.Sync(); err != nil {
