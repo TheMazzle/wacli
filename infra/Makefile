@@ -25,7 +25,7 @@ LOG_FILE = $(LOG_DIR)/wacli-sync.log
 .PHONY: install uninstall reinstall status logs build
 .PHONY: install-sync uninstall-sync install-tunnel uninstall-tunnel
 .PHONY: mode-primary mode-fallback mode-status
-.PHONY: install-health uninstall-health health
+.PHONY: install-health uninstall-health health relink
 
 install: $(LOG_DIR) install-health
 	@echo "==> Installing wacli-sync script..."
@@ -92,6 +92,8 @@ install-health: $(LOG_DIR)
 	@echo "==> Installing wacli-health script..."
 	cp $(HEALTH_SCRIPT_SRC) $(HEALTH_SCRIPT_DST)
 	chmod +x $(HEALTH_SCRIPT_DST)
+	cp $(RELINK_SCRIPT_SRC) $(RELINK_SCRIPT_DST)
+	chmod +x $(RELINK_SCRIPT_DST)
 	@echo "==> Installing health LaunchAgent..."
 	cp $(HEALTH_PLIST_SRC) $(HEALTH_PLIST_DST)
 	-launchctl bootout gui/$(UID)/$(LABEL_HEALTH) 2>/dev/null
@@ -103,6 +105,13 @@ uninstall-health:
 	-launchctl bootout gui/$(UID)/$(LABEL_HEALTH) 2>/dev/null
 	-rm -f $(HEALTH_PLIST_DST)
 	-rm -f $(HEALTH_SCRIPT_DST)
+
+RELINK_SCRIPT_SRC = scripts/wacli-relink.sh
+RELINK_SCRIPT_DST = $(HOME)/bin/wacli-relink.sh
+
+# Opnieuw koppelen aan WhatsApp via QR (na LoggedOut / authenticated=false).
+relink:
+	@$(RELINK_SCRIPT_DST)
 
 health:
 	@$(HEALTH_SCRIPT_DST) || true
