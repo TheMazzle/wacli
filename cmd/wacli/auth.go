@@ -18,6 +18,7 @@ func newAuthCmd(flags *rootFlags) *cobra.Command {
 	var follow bool
 	var idleExit time.Duration
 	var downloadMedia bool
+	var qrFile string
 
 	cmd := &cobra.Command{
 		Use:   "auth",
@@ -49,6 +50,14 @@ func newAuthCmd(flags *rootFlags) *cobra.Command {
 					fmt.Fprintln(os.Stderr, "\nScan this QR code with WhatsApp (Linked Devices):")
 					qrterminal.GenerateHalfBlock(code, qrterminal.M, os.Stderr)
 					fmt.Fprintln(os.Stderr)
+					// Headless pairing: the Mac Mini has no display, so the raw
+					// code can be written out and rendered elsewhere (qrencode,
+					// a phone-visible image, ...). Rewritten on every refresh.
+					if qrFile != "" {
+						if err := os.WriteFile(qrFile, []byte(code+"\n"), 0o600); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: could not write QR to %s: %v\n", qrFile, err)
+						}
+					}
 				},
 			})
 			if err != nil {
@@ -67,6 +76,7 @@ func newAuthCmd(flags *rootFlags) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&qrFile, "qr-file", "", "write the raw QR code string to this file on every refresh (headless pairing)")
 	cmd.Flags().BoolVar(&follow, "follow", false, "keep syncing after auth")
 	cmd.Flags().DurationVar(&idleExit, "idle-exit", 30*time.Second, "exit after being idle (bootstrap/once modes)")
 	cmd.Flags().BoolVar(&downloadMedia, "download-media", false, "download media in the background during sync")
