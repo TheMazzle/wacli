@@ -73,7 +73,7 @@ if [[ -x "$WACLI_BIN" ]]; then
         AUTHED=$(echo "$DOCTOR" | /usr/bin/python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["authenticated"])' 2>/dev/null)
         if [[ "$AUTHED" == "False" ]]; then
             escalate CRITICAL "device is NIET gekoppeld aan WhatsApp" \
-                     "run: wacli auth (QR scannen met telefoon)"
+                     "koppel via het statusbolletje in Whatslack, of run wacli-pair-web.sh"
         fi
     else
         escalate WARN "wacli doctor gaf geen output" "check of ~/bin/wacli werkt"
