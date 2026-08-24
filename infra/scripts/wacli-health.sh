@@ -12,7 +12,8 @@
 #   3. leeftijd nieuwste bericht     -> het echte end-to-end signaal
 #   4. daemon proces aanwezig        -> zwakste check, staat bewust laatst
 #
-# Env overrides: WARN_HOURS (12), CRIT_HOURS (24), WACLI_STORE_DIR (~/.wacli)
+# Env overrides: WARN_HOURS (12), CRIT_HOURS (24), WACLI_STORE_DIR (~/.wacli),
+#                HA_NOTIFY_TARGET (mobile_app_wjjs_iphone)
 
 set -uo pipefail
 
@@ -24,6 +25,7 @@ LOG_DIR="$HOME/Library/Logs/Claude"
 LOG_FILE="$LOG_DIR/wacli-health.log"
 STATE_FILE="$LOG_DIR/.wacli-health.state"
 NOTIFY="$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh"
+HA_NOTIFY_TARGET="${HA_NOTIFY_TARGET:-mobile_app_wjjs_iphone}"
 
 WARN_HOURS="${WARN_HOURS:-12}"
 CRIT_HOURS="${CRIT_HOURS:-24}"
@@ -149,9 +151,50 @@ if [[ "$PREV" == "$SIG" && "$(date '+%H:%M')" != "09:00" ]]; then
 fi
 
 MSG="wacli sync $LEVEL: $DETAIL — $ACTION"
+
+# Drie kanalen, bewust met verschillende afhankelijkheden. Tijdens de storing van
+# juni 2026 wees notify-user.sh naar een verouderd Tailscale-IP; elf meldingen
+# belandden ongezien in /tmp/notify-suppressed.log. Een alarm met één kanaal is
+# een alarm dat je niet hoort.
+
+# 1. macOS-notificatie op de MacBook (werkt alleen als die aan staat)
 if [[ -x "$NOTIFY" ]]; then
     FORCE_NOTIFY=$([[ "$LEVEL" == "CRITICAL" ]] && echo 1 || echo 0) "$NOTIFY" "$MSG" >/dev/null 2>&1
 fi
+
+# 2. Push naar de telefoon via Home Assistant — alleen bij CRITICAL, en
+#    onafhankelijk van of er een Mac aan staat.
+if [[ "$LEVEL" == "CRITICAL" ]]; then
+    # ~/.env NIET sourcen: dat voert de inhoud uit als shell-code. Een waarde
+    # met spaties wordt dan een commando ("Should: command not found"). Alleen
+    # de twee sleutels lezen die we nodig hebben.
+    env_value() {
+        [[ -f "$HOME/.env" ]] || return
+        sed -n "s/^[[:space:]]*$1=//p" "$HOME/.env" | head -1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"
+    }
+    HA_URL="${HA_URL:-$(env_value HA_URL)}"
+    HA_TOKEN="${HA_TOKEN:-$(env_value HA_TOKEN)}"
+
+    if [[ -n "${HA_URL:-}" && -n "${HA_TOKEN:-}" ]]; then
+        /usr/bin/curl -s -m 10 -o /dev/null \
+            -H "Authorization: Bearer $HA_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(/usr/bin/python3 -c '
+import json, sys
+print(json.dumps({
+    "title": "WhatsApp sync gestopt",
+    "message": sys.argv[1],
+    "data": {"push": {"interruption-level": "time-sensitive"}},
+}))' "$DETAIL — $ACTION")" \
+            "$HA_URL/api/services/notify/$HA_NOTIFY_TARGET" 2>/dev/null \
+            && log "push verstuurd naar $HA_NOTIFY_TARGET" \
+            || log "push naar Home Assistant mislukt"
+    else
+        log "geen HA_URL/HA_TOKEN in ~/.env; push overgeslagen"
+    fi
+fi
+
+# 3. Lokale notificatie op de Mac Mini (geen scherm, maar wel zichtbaar bij VNC)
 osascript -e "display notification \"$(echo "$MSG" | sed 's/"/\\"/g')\" with title \"wacli sync\" subtitle \"$LEVEL\" sound name \"Sosumi\"" >/dev/null 2>&1
 
 exit 0
