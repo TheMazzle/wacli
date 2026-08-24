@@ -365,28 +365,30 @@ func BestContactName(info types.ContactInfo) string {
 }
 
 func (c *Client) ResolveChatName(ctx context.Context, chat types.JID, pushName string) string {
-	fallback := chat.String()
+	in := ChatNameInputs{Chat: chat, PushName: pushName, ResolvedPN: chat}
 
 	if chat.Server == types.GroupServer || chat.IsBroadcastList() {
-		info, err := c.GetGroupInfo(ctx, chat)
-		if err == nil && info != nil {
-			if name := strings.TrimSpace(info.GroupName.Name); name != "" {
-				return name
-			}
+		if info, err := c.GetGroupInfo(ctx, chat); err == nil && info != nil {
+			in.GroupName = info.GroupName.Name
 		}
-	} else {
-		info, err := c.GetContact(ctx, chat.ToNonAD())
-		if err == nil {
-			if name := BestContactName(info); name != "" {
-				return name
-			}
+		return ChatDisplayName(in)
+	}
+
+	if info, err := c.GetContact(ctx, chat.ToNonAD()); err == nil {
+		in.ContactName = BestContactName(info)
+	}
+
+	// Een LID en het bijbehorende telefoonnummer zijn aparte contactrijen. Deze
+	// stap ontbrak, waardoor 40 DM's een rauwe LID als naam kregen terwijl de
+	// mapping lokaal beschikbaar was.
+	if pn := c.ResolveLIDToPN(ctx, chat); pn != chat {
+		in.ResolvedPN = pn
+		if info, err := c.GetContact(ctx, pn.ToNonAD()); err == nil {
+			in.ResolvedPNContactName = BestContactName(info)
 		}
 	}
 
-	if name := strings.TrimSpace(pushName); name != "" && name != "-" {
-		return name
-	}
-	return fallback
+	return ChatDisplayName(in)
 }
 
 func (c *Client) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error) {

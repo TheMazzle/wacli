@@ -22,18 +22,18 @@ type Media struct {
 }
 
 type ParsedMessage struct {
-	Chat           types.JID
-	ID             string
-	SenderJID      string
-	Timestamp      time.Time
-	FromMe         bool
-	Text           string
-	Media          *Media
-	PushName       string
-	ReplyToID      string
-	ReplyToDisplay string
-	ReactionToID   string
-	ReactionEmoji  string
+	Chat            types.JID
+	ID              string
+	SenderJID       string
+	Timestamp       time.Time
+	FromMe          bool
+	Text            string
+	Media           *Media
+	PushName        string
+	ReplyToID       string
+	ReplyToDisplay  string
+	ReactionToID    string
+	ReactionEmoji   string
 	MsgOrderID      *uint64
 	IsLive          bool
 	EventType       string // "message" (default), "system"

@@ -196,6 +196,11 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 		defer stopMedia()
 	}
 
+	// Chats die eerder een rauwe JID als naam kregen alsnog oplossen. Draait
+	// vóór de refresh-blokken: de pas leest alleen lokale tabellen en mag niet
+	// achter een netwerkgebonden avatarronde van honderden foto's wachten.
+	a.repairChatNames(ctx)
+
 	// Optional: bootstrap imports (helps contacts/groups management without waiting for events).
 	if opts.RefreshContacts {
 		_ = a.refreshContacts(ctx)
