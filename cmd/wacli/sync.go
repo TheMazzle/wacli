@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,7 +23,8 @@ import (
 
 // syncHandler implements ipc.Handler for the sync daemon.
 type syncHandler struct {
-	app *appPkg.App
+	app   *appPkg.App
+	state *daemonState
 }
 
 func (h *syncHandler) SendText(to, message, replyToMsgID string) (string, error) {
@@ -341,15 +343,13 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			a, lk, err := newApp(ctx, flags, true, false)
+			// allowUnauthed: in --follow mode the daemon stays up while
+			// unlinked so a client can start pairing over IPC.
+			a, lk, err := newApp(ctx, flags, true, true)
 			if err != nil {
 				return err
 			}
 			defer closeApp(a, lk)
-
-			if err := a.EnsureAuthed(); err != nil {
-				return err
-			}
 
 			mode := appPkg.SyncModeFollow
 			if once {
@@ -360,10 +360,15 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 				mode = appPkg.SyncModeOnce
 			}
 
-			// Start IPC server if enabled (default for --follow mode)
+			state := newDaemonState()
+
+			// Start IPC server if enabled (default for --follow mode).
+			// This deliberately happens BEFORE any auth check: when the device
+			// is unlinked, this socket is the only way to start pairing from
+			// another machine.
 			var ipcServer *ipc.Server
 			if enableIPC && mode == appPkg.SyncModeFollow {
-				handler := &syncHandler{app: a}
+				handler := &syncHandler{app: a, state: state}
 				ipcServer = ipc.NewServer(a.StoreDir(), handler)
 				if err := ipcServer.Start(); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: failed to start IPC server: %v\n", err)
@@ -372,7 +377,7 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 				}
 			}
 
-			res, err := a.Sync(ctx, appPkg.SyncOptions{
+			opts := appPkg.SyncOptions{
 				Mode:            mode,
 				AllowQR:         false,
 				DownloadMedia:   downloadMedia,
@@ -381,7 +386,18 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 				RefreshAvatars:  refreshAvatars,
 				BackfillGaps:    backfillGaps,
 				IdleExit:        idleExit,
-			})
+			}
+
+			var res appPkg.SyncResult
+			if mode == appPkg.SyncModeFollow {
+				res, err = runSyncDaemon(ctx, a, state, opts)
+			} else {
+				// One-shot modes stay strict: no pairing, fail fast.
+				if err = a.EnsureAuthed(); err != nil {
+					return err
+				}
+				res, err = a.Sync(ctx, opts)
+			}
 			if err != nil {
 				return err
 			}
@@ -409,6 +425,70 @@ func newSyncCmd(flags *rootFlags) *cobra.Command {
 	return cmd
 }
 
+// runSyncDaemon alternates between two states for the lifetime of the daemon:
+//
+//	needs_pairing ──(client asks to pair)──▶ pairing ──(scanned)──▶ syncing
+//	      ▲                                                            │
+//	      └──────────────────(WhatsApp unlinks the device)─────────────┘
+//
+// Staying alive while unlinked is the whole point: the IPC socket must survive
+// so Whatslack can show a QR. Fatal states that pairing cannot fix
+// (client outdated, stream replaced, temporary ban) still abort with an error
+// so the process exits non-zero and monitoring notices.
+func runSyncDaemon(ctx context.Context, a *appPkg.App, state *daemonState, opts appPkg.SyncOptions) (appPkg.SyncResult, error) {
+	var total appPkg.SyncResult
+
+	for {
+		if err := a.EnsureAuthed(); err != nil {
+			state.setNeedsPairing(err.Error())
+			fmt.Fprintf(os.Stderr, "\n[PAIRING] Not linked: %v\n", err)
+			fmt.Fprintln(os.Stderr, "[PAIRING] Waiting for a pairing request (Whatslack, or run wacli-pair-web.sh).")
+
+			select {
+			case <-ctx.Done():
+				return total, nil
+			case <-state.pairRequested():
+			}
+
+			state.setPairing()
+			fmt.Fprintln(os.Stderr, "[PAIRING] Starting QR pairing...")
+
+			pairOpts := opts
+			pairOpts.Mode = appPkg.SyncModeBootstrap
+			pairOpts.AllowQR = true
+			pairOpts.OnQRCode = state.setQR
+
+			if _, err := a.Sync(ctx, pairOpts); err != nil {
+				state.setNeedsPairing(fmt.Sprintf("pairing failed: %v", err))
+				fmt.Fprintf(os.Stderr, "[PAIRING] Failed: %v\n", err)
+				continue
+			}
+			if err := a.EnsureAuthed(); err != nil {
+				state.setNeedsPairing(err.Error())
+				continue
+			}
+			fmt.Fprintln(os.Stderr, "[PAIRING] Device linked.")
+		}
+
+		state.setSyncing()
+		res, err := a.Sync(ctx, opts)
+		total.MessagesStored += res.MessagesStored
+
+		if err == nil {
+			return total, nil
+		}
+
+		var fatal *appPkg.FatalConnectionError
+		if errors.As(err, &fatal) && fatal.NeedsPairing() {
+			// Recoverable by scanning a QR: go back to waiting rather than dying,
+			// so the socket stays available to whoever wants to fix it.
+			state.setNeedsPairing(fatal.Reason)
+			continue
+		}
+		return total, err
+	}
+}
+
 // mediaFileExists reports whether localPath is non-empty and the file exists on disk.
 // A non-empty path that doesn't exist (e.g. downloaded on another machine) returns false.
 func mediaFileExists(localPath string) bool {
@@ -417,4 +497,50 @@ func mediaFileExists(localPath string) bool {
 	}
 	_, err := os.Stat(localPath)
 	return err == nil
+}
+
+// --- Connection status & pairing (ipc.Handler) ---
+//
+// These exist so a client can see that the sync is broken and fix it without a
+// terminal. See Decisions/2026-08-24-wacli-405-silent-sync-failure.md.
+
+func (h *syncHandler) ConnectionStatus() ipc.ConnectionStatusResult {
+	status := ipc.ConnectionStatusResult{State: ipc.StateNeedsPairing}
+	if h.state != nil {
+		status = h.state.snapshot()
+	}
+	if h.app == nil {
+		status.Detail = "app not initialized"
+		return status
+	}
+	if wac := h.app.WA(); wac != nil {
+		status.Authenticated = wac.IsAuthed()
+		status.Connected = wac.IsConnected()
+	}
+	if db := h.app.DB(); db != nil {
+		if ts, err := db.LatestMessageTS(); err == nil {
+			status.LastMessageTS = ts
+		}
+	}
+	return status
+}
+
+func (h *syncHandler) StartPairing() error {
+	if h.state == nil {
+		return fmt.Errorf("daemon state not initialized")
+	}
+	// Idempotent by design: asking to pair while already syncing is a no-op,
+	// so a client can fire this without first checking the state.
+	if h.state.snapshot().State == ipc.StateSyncing {
+		return nil
+	}
+	h.state.requestPairing()
+	return nil
+}
+
+func (h *syncHandler) PairingQR() ipc.PairingQRResult {
+	if h.state == nil {
+		return ipc.PairingQRResult{State: ipc.StateNeedsPairing}
+	}
+	return h.state.pairingQR()
 }

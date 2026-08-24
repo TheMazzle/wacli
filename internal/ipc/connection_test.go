@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"os"
 	"sync"
 	"testing"
 )
@@ -42,9 +43,16 @@ func (f *fakeHandler) PairingQR() PairingQRResult {
 }
 
 // newTestServer starts an IPC server on a temp store dir and returns a client.
+//
+// t.TempDir() is not usable here: its paths blow past the 104-character
+// sun_path limit for Unix sockets on macOS, giving "bind: invalid argument".
 func newTestServer(t *testing.T, h Handler) *Client {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "wacli-ipc-")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	srv := NewServer(dir, h)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("start server: %v", err)

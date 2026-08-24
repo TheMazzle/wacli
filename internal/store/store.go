@@ -479,13 +479,13 @@ type Chat struct {
 }
 
 type Group struct {
-	JID              string
-	Name             string
-	OwnerJID         string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	IsParent         bool
-	LinkedParentJID  string
+	JID             string
+	Name            string
+	OwnerJID        string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	IsParent        bool
+	LinkedParentJID string
 }
 
 type GroupParticipant struct {
@@ -579,24 +579,24 @@ func (d *DB) UpsertChat(jid, kind, name string, lastTS time.Time) error {
 }
 
 type UpsertMessageParams struct {
-	ChatJID        string
-	ChatName       string
-	MsgID          string
-	SenderJID      string
-	SenderName     string
-	Timestamp      time.Time
-	FromMe         bool
-	Text           string
-	DisplayText    string
-	MediaType      string
-	MediaCaption   string
-	Filename       string
-	MimeType       string
-	DirectPath     string
-	MediaKey       []byte
-	FileSHA256     []byte
-	FileEncSHA256  []byte
-	FileLength     uint64
+	ChatJID         string
+	ChatName        string
+	MsgID           string
+	SenderJID       string
+	SenderName      string
+	Timestamp       time.Time
+	FromMe          bool
+	Text            string
+	DisplayText     string
+	MediaType       string
+	MediaCaption    string
+	Filename        string
+	MimeType        string
+	DirectPath      string
+	MediaKey        []byte
+	FileSHA256      []byte
+	FileEncSHA256   []byte
+	FileLength      uint64
 	ReactionToMsgID string
 	ReactionEmoji   string
 	ReplyToMsgID    string
@@ -844,6 +844,18 @@ func (d *DB) CountMessages() (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// LatestMessageTS returns the Unix timestamp of the newest stored message, or
+// 0 when there are none. This is the end-to-end health signal for the sync:
+// a process can be alive and connected and still be delivering nothing.
+func (d *DB) LatestMessageTS() (int64, error) {
+	row := d.sql.QueryRow(`SELECT COALESCE(MAX(ts), 0) FROM messages`)
+	var ts int64
+	if err := row.Scan(&ts); err != nil {
+		return 0, err
+	}
+	return ts, nil
 }
 
 func (d *DB) GetOldestMessageInfo(chatJID string) (MessageInfo, error) {

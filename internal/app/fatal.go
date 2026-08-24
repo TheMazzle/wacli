@@ -21,7 +21,14 @@ type FatalConnectionError struct {
 	Action string
 	// Event is the whatsmeow event that triggered this.
 	Event interface{}
+	// Pairable is true when scanning a QR code resolves this state. The daemon
+	// stays alive for those so a client can drive pairing over IPC; everything
+	// else exits non-zero because it needs a human at the CLI.
+	Pairable bool
 }
+
+// NeedsPairing reports whether this state is resolved by re-pairing the device.
+func (e *FatalConnectionError) NeedsPairing() bool { return e.Pairable }
 
 func (e *FatalConnectionError) Error() string {
 	return fmt.Sprintf("fatal WhatsApp connection state: %s — %s", e.Reason, e.Action)
@@ -39,9 +46,10 @@ func fatalConnectionEvent(evt interface{}) *FatalConnectionError {
 		}
 	case *events.LoggedOut:
 		return &FatalConnectionError{
-			Reason: fmt.Sprintf("device was unlinked by WhatsApp (on_connect=%t, reason=%s)", v.OnConnect, v.Reason),
-			Action: "re-pair the device: run `wacli auth` and scan the QR code with your phone",
-			Event:  evt,
+			Reason:   fmt.Sprintf("device was unlinked by WhatsApp (on_connect=%t, reason=%s)", v.OnConnect, v.Reason),
+			Action:   "re-pair the device: scan the QR in Whatslack, or run `wacli-pair-web.sh`",
+			Event:    evt,
+			Pairable: true,
 		}
 	case *events.StreamReplaced:
 		return &FatalConnectionError{
