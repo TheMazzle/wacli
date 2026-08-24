@@ -57,6 +57,8 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	lastEvent.Store(time.Now().UTC().UnixNano())
 
 	disconnected := make(chan struct{}, 1)
+	// Buffered so the event handler never blocks; only the first fatal wins.
+	fatalCh := make(chan *FatalConnectionError, 1)
 
 	var stopMedia func()
 	var mediaJobs chan mediaJob
@@ -83,6 +85,15 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 
 	handlerID := a.wa.AddEventHandler(func(evt interface{}) {
 		lastEvent.Store(time.Now().UTC().UnixNano())
+
+		if fatal := fatalConnectionEvent(evt); fatal != nil {
+			fmt.Fprintf(os.Stderr, "\n[FATAL] %s\n[FATAL] Action: %s\n", fatal.Reason, fatal.Action)
+			select {
+			case fatalCh <- fatal:
+			default:
+			}
+			return
+		}
 
 		switch v := evt.(type) {
 		case *events.Message:
@@ -213,6 +224,8 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 			case <-ctx.Done():
 				fmt.Fprintln(os.Stderr, "\nStopping sync.")
 				return SyncResult{MessagesStored: messagesStored.Load()}, nil
+			case fatal := <-fatalCh:
+				return SyncResult{MessagesStored: messagesStored.Load()}, fatal
 			case <-disconnected:
 				fmt.Fprintln(os.Stderr, "Reconnecting...")
 				if err := a.wa.ReconnectWithBackoff(ctx, 2*time.Second, 30*time.Second); err != nil {
@@ -241,6 +254,8 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 		case <-ctx.Done():
 			fmt.Fprintln(os.Stderr, "\nStopping sync.")
 			return SyncResult{MessagesStored: messagesStored.Load()}, nil
+		case fatal := <-fatalCh:
+			return SyncResult{MessagesStored: messagesStored.Load()}, fatal
 		case <-disconnected:
 			fmt.Fprintln(os.Stderr, "Reconnecting...")
 			if err := a.wa.ReconnectWithBackoff(ctx, 2*time.Second, 30*time.Second); err != nil {
@@ -655,17 +670,17 @@ func (a *App) storeGroupInfoEvent(ctx context.Context, evt *events.GroupInfo) {
 		msgID := fmt.Sprintf("system_%d_%d", ts.Unix(), i)
 		_ = a.db.UpsertChat(chatJID, "group", chatName, ts)
 		_ = a.db.UpsertMessage(store.UpsertMessageParams{
-			ChatJID:    chatJID,
-			ChatName:   chatName,
-			MsgID:      msgID,
-			SenderJID:  senderJID,
-			SenderName: senderName,
-			Timestamp:  ts,
-			FromMe:     false,
-			Text:       text,
+			ChatJID:     chatJID,
+			ChatName:    chatName,
+			MsgID:       msgID,
+			SenderJID:   senderJID,
+			SenderName:  senderName,
+			Timestamp:   ts,
+			FromMe:      false,
+			Text:        text,
 			DisplayText: text,
-			EventType:  "system",
-			IsLive:     true,
+			EventType:   "system",
+			IsLive:      true,
 		})
 	}
 }
