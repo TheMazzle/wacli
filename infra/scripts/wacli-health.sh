@@ -14,8 +14,9 @@
 #
 # Env overrides: WARN_HOURS (12), CRIT_HOURS (24), WACLI_STORE_DIR (~/.wacli),
 #                HA_NOTIFY_TARGET (mobile_app_wjjs_iphone), LOG_DIR
-#                (~/Library/Logs/Claude), HEARTBEAT_HOURS (6), WACLI_BIN
-#                (~/bin/wacli), SYNC_LOG (~/Library/Logs/Whatslack/wacli-sync.log),
+#                (~/Library/Logs/Claude), HEARTBEAT_HOURS (6), REPUSH_HOURS (4),
+#                WACLI_BIN (~/bin/wacli), SYNC_LOG
+#                (~/Library/Logs/Whatslack/wacli-sync.log),
 #                NOTIFY (~/Projects/bjorn-supervisor/infra/scripts/notify-user.sh)
 #                — deze bestaan puur om alle vier checks in de
 #                test-health-*.sh tests te kunnen stubben, zonder ooit echte
@@ -31,6 +32,7 @@ SYNC_LOG="${SYNC_LOG:-$HOME/Library/Logs/Whatslack/wacli-sync.log}"
 LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/Claude}"
 LOG_FILE="$LOG_DIR/wacli-health.log"
 STATE_FILE="$LOG_DIR/.wacli-health.state"
+PUSH_STATE_FILE="$LOG_DIR/.wacli-health.last-push"
 NOTIFY="${NOTIFY:-$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh}"
 HA_NOTIFY_TARGET="${HA_NOTIFY_TARGET:-mobile_app_wjjs_iphone}"
 
@@ -42,6 +44,16 @@ CRIT_HOURS="${CRIT_HOURS:-24}"
 # Een vaste kloktijd werkt niet: de LaunchAgent draait elke 1800s vanaf het
 # laadmoment, dus altijd op dezelfde minuut — een match op "09:00" raakt nooit.
 HEARTBEAT_HOURS="${HEARTBEAT_HOURS:-6}"
+
+# Zelfde probleem als vorige run niet opnieuw pushen (regel ~185) voorkomt
+# spam op elke 1800s-run, maar mag een aanhoudende WARN/CRITICAL niet voor
+# altijd stil laten blijven — anders is dit exact het juni-2026-scenario
+# opnieuw: een statische DETAIL-tekst ("device is NIET gekoppeld") levert
+# nooit een nieuwe SIG op, dus na de allereerste push zou er nooit weer een
+# volgen. Default 4 uur: vaak genoeg om binnen een werkdag op te vallen
+# (6x/dag bij een aanhoudende storing), niet zo vaak dat het ruis wordt
+# (bij het 1800s-cron-interval zou een lagere waarde bijna elke run pushen).
+REPUSH_HOURS="${REPUSH_HOURS:-4}"
 MAX_LOG_BYTES=$(( 5 * 1024 * 1024 ))
 
 mkdir -p "$LOG_DIR"
@@ -171,10 +183,20 @@ fi
 
 for f in "${FINDINGS[@]}"; do log "$f"; done
 
-# Zelfde probleem als vorige run? Niet opnieuw pushen (behalve om 09:00).
-if [[ "$PREV" == "$SIG" && "$(date '+%H:%M')" != "09:00" ]]; then
-    exit 0
+# Zelfde probleem als vorige run? Niet opnieuw pushen — TENZIJ het al
+# REPUSH_HOURS aanhoudt. Elders (PUSH_STATE_FILE) bijgehouden, niet via
+# LOG_FILE: de FINDINGS hierboven zijn net naar LOG_FILE geschreven, dus die
+# mtime is nu altijd "net"; hij kan niet ook dienen als meetpunt voor "hoe
+# lang geleden gepusht". Verstreken tijd, geen kloktijd — zie HEARTBEAT_HOURS
+# hierboven voor waarom een vaste "09:00"-match nooit matcht.
+if [[ "$PREV" == "$SIG" ]]; then
+    LAST_PUSH=$(stat -f%m "$PUSH_STATE_FILE" 2>/dev/null || echo 0)
+    PUSH_AGE_SECONDS=$(( $(date +%s) - LAST_PUSH ))
+    if (( PUSH_AGE_SECONDS < REPUSH_HOURS * 3600 )); then
+        exit 0
+    fi
 fi
+touch "$PUSH_STATE_FILE" 2>/dev/null || true
 
 MSG="wacli sync $LEVEL: $DETAIL — $ACTION"
 

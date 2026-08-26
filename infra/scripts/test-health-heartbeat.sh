@@ -70,4 +70,79 @@ AFTER_C=$(health_lines_of "$WORK_C")
 (( AFTER_C > BEFORE_C )) || fail "HEARTBEAT_HOURS=0 schreef geen regel"
 echo "==> Scenario C OK: HEARTBEAT_HOURS=0 forceert een regel"
 
+# --- Scenario D: een aanhoudende CRITICAL met ONVERANDERDE DETAIL-tekst moet
+# na REPUSH_HOURS opnieuw pushen, en NIET op elke tussentijdse run. Dit is de
+# kern van de fix op regel ~186: vóór de fix was de enige uitzondering op
+# "zelfde SIG? niet opnieuw pushen" een letterlijke kloktijd-match op
+# "09:00", die de LaunchAgent (StartInterval 1800 vanaf laadmoment) nooit
+# raakt — een statische DETAIL zoals "device is NIET gekoppeld aan
+# WhatsApp" zou dan na de allereerste push nooit meer een tweede krijgen.
+#
+# Eigen CRIT-stub (i.p.v. de gedeelde WACLI_BIN_STUB uit health-test-common.sh,
+# die altijd authenticated:true teruggeeft): authenticated:false forceert
+# check 2 (device-koppeling) naar CRITICAL met een vaste tekst — geen
+# tijd-afhankelijk element in DETAIL, dus SIG blijft constant over runs.
+CRIT_BIN_STUB="$HEALTH_FIXTURES/fake-wacli-crit"
+cat > "$CRIT_BIN_STUB" <<'STUB'
+#!/bin/bash
+echo '{"success":true,"data":{"authenticated":false,"connected":false,"lock_held":false,"fts_enabled":true},"error":null}'
+STUB
+chmod +x "$CRIT_BIN_STUB"
+
+run_health_crit() {
+    # $1 = werkmap (LOG_DIR), $2 = REPUSH_HOURS ("" = default van het script)
+    local work="$1" rh="${2:-}"
+    if [[ -n "$rh" ]]; then
+        LOG_DIR="$work" WACLI_STORE_DIR="$HEALTH_STORE" WACLI_BIN="$CRIT_BIN_STUB" \
+            SYNC_LOG="$SYNC_LOG_STUB" NOTIFY="$NOTIFY_STUB" REPUSH_HOURS="$rh" \
+            bash "$HEALTH" >/dev/null 2>&1
+    else
+        LOG_DIR="$work" WACLI_STORE_DIR="$HEALTH_STORE" WACLI_BIN="$CRIT_BIN_STUB" \
+            SYNC_LOG="$SYNC_LOG_STUB" NOTIFY="$NOTIFY_STUB" \
+            bash "$HEALTH" >/dev/null 2>&1
+    fi
+}
+
+notify_calls_of() { grep -c "^CALLED:" "$NOTIFY_STUB_LOG" 2>/dev/null || echo 0; }
+
+WORK_D=$(mktemp -d)
+: > "$NOTIFY_STUB_LOG"
+
+# Eerste run: nieuwe SIG (PREV was leeg) -> altijd pushen, ongeacht REPUSH_HOURS.
+run_health_crit "$WORK_D" ""
+[[ "$(health_verdict_of "$WORK_D")" == "CRITICAL" ]] \
+    || fail "kon geen deterministische CRITICAL-verdict afdwingen (kreeg $(health_verdict_of "$WORK_D")) — test is niet hermetisch"
+SIG_D=$(cat "$WORK_D/.wacli-health.state")
+CALLS_1=$(notify_calls_of)
+(( CALLS_1 == 1 )) \
+    || fail "eerste CRITICAL-run pushte $CALLS_1 keer, verwacht precies 1 (eerste keer dit probleem)"
+echo "==> Scenario D stap 1 OK: eerste CRITICAL pusht (1x)"
+
+# Tweede run, direct erna, exact dezelfde DETAIL-tekst (statisch, geen
+# tijd-element) -> zelfde SIG, nog geen REPUSH_HOURS verstreken -> GEEN
+# nieuwe push.
+run_health_crit "$WORK_D" ""
+[[ "$(cat "$WORK_D/.wacli-health.state")" == "$SIG_D" ]] \
+    || fail "SIG veranderde tussen twee identieke CRITICAL-runs — test-aanname klopt niet"
+CALLS_2=$(notify_calls_of)
+(( CALLS_2 == CALLS_1 )) \
+    || fail "aanhoudende CRITICAL pushte al vóór REPUSH_HOURS verstreken was ($CALLS_2 na run 2, verwacht $CALLS_1) — dit is precies de spam die de dedup moet voorkomen"
+echo "==> Scenario D stap 2 OK: geen herhaalde push vóór REPUSH_HOURS verstreken"
+
+# REPUSH_HOURS default is 4u. Zet het laatste-push-tijdstip 5 uur terug
+# (mtime, niet de systeemklok — zie scenario B) en run opnieuw: dezelfde
+# onveranderde DETAIL-tekst moet nu WEL opnieuw pushen.
+FIVE_HOURS_AGO=$(date -v-5H '+%Y%m%d%H%M.%S')
+touch -t "$FIVE_HOURS_AGO" "$WORK_D/.wacli-health.last-push" \
+    || fail "kon de mtime van PUSH_STATE_FILE niet terugzetten"
+run_health_crit "$WORK_D" ""
+[[ "$(cat "$WORK_D/.wacli-health.state")" == "$SIG_D" ]] \
+    || fail "SIG veranderde ná het terugzetten van de mtime — test-aanname klopt niet"
+CALLS_3=$(notify_calls_of)
+(( CALLS_3 > CALLS_2 )) \
+    || fail "geen herhaalde push na >REPUSH_HOURS aanhoudende CRITICAL met onveranderde detail-tekst — de kern van de fix werkt niet"
+echo "==> Scenario D stap 3 OK: aanhoudende CRITICAL pusht opnieuw na REPUSH_HOURS (default 4u)"
+
+echo "==> Scenario D OK: repush-mechanisme voor aanhoudende CRITICAL met statische detail-tekst"
+
 echo "==> Alle hartslag-scenario's geslaagd"
