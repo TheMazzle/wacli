@@ -15,7 +15,11 @@
 
 set -uo pipefail
 
-REMOTE="macmini"
+# Overridable zodat test-db-sync-stale-notify.sh na de guard een gegarandeerd
+# onbereikbare host kan invullen — de test stopt dan bij de bestaande
+# bereikbaarheidscheck hieronder, vóór de echte backup/rsync, in plaats van
+# door te lopen naar de echte Mac Mini-database.
+REMOTE="${REMOTE:-macmini}"
 REMOTE_DB="$HOME/.wacli/wacli.db"
 REMOTE_EXPORT="$HOME/.wacli/wacli-export.db"
 REMOTE_MEDIA="$HOME/.wacli/media/"
