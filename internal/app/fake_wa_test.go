@@ -30,6 +30,7 @@ type fakeWA struct {
 	groups   map[types.JID]*types.GroupInfo
 
 	groupInfoCalls int
+	groupInfoErr   error // als gezet: GetGroupInfo geeft deze fout terug in plaats van te lookuppen
 
 	onDemandHistory func(lastKnown types.MessageInfo, count int) *events.HistorySync
 }
@@ -155,6 +156,9 @@ func (f *fakeWA) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupI
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.groupInfoCalls++
+	if f.groupInfoErr != nil {
+		return nil, f.groupInfoErr
+	}
 	return f.groups[jid], nil
 }
 
