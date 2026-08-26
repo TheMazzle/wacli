@@ -246,3 +246,64 @@ func TestStoreParsedMessageUsesGroupCache(t *testing.T) {
 		t.Errorf("%d deelnemersrijen in db, wil 1", participantCount)
 	}
 }
+
+// Fix-ronde 2 van 5: storeParsedMessage riep vóór de metadata-cache eerst
+// a.wa.ResolveChatName aan voor de chatnaam. In productie
+// (internal/wa/client.go, Client.ResolveChatName) doet die voor een
+// groeps-JID altijd een EIGEN, ongecachete GetGroupInfo-aanroep — los van de
+// cache die de vorige twee ronden aan de metadata-write (regel ~350)
+// toevoegden. Het gevolg: elk groepsbericht kostte nog steeds precies één
+// netwerkronde, alleen niet meer de tweede.
+//
+// Met een lege PushName volgt de fake dezelfde volgorde als de echte
+// client (eerst de groepstak controleren, pushname komt pas daarna aan
+// bod), dus deze test reproduceert het productiegedrag correct — in
+// tegenstelling tot TestStoreParsedMessageUsesGroupCache hierboven, die met
+// een niet-lege PushName de fake's eigen kortsluiting gebruikte en daardoor
+// deze bug niet ving.
+func TestStoreParsedMessageResolvesGroupNameFromSingleCachedLookup(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+
+	group := types.JID{User: "120363", Server: types.GroupServer}
+	member := types.JID{User: "31600000000", Server: types.DefaultUserServer}
+	f.groups[group] = &types.GroupInfo{
+		GroupName:    types.GroupName{Name: "Amsteldorpkidz"},
+		Participants: []types.GroupParticipant{{JID: member}},
+	}
+
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		pm := wa.ParsedMessage{
+			Chat:      group,
+			ID:        fmt.Sprintf("naam-msg-%d", i),
+			SenderJID: member.ToNonAD().String(),
+			Timestamp: time.Now(),
+			Text:      "hoi",
+			PushName:  "", // leeg: dwingt hetzelfde pad af als de echte client
+		}
+		if err := a.storeParsedMessage(ctx, pm); err != nil {
+			t.Fatalf("bericht %d: %v", i, err)
+		}
+	}
+
+	if f.groupInfoCalls != 1 {
+		t.Errorf("GetGroupInfo %d keer aangeroepen voor naam+metadata van 5 berichten in dezelfde groep, wil 1", f.groupInfoCalls)
+	}
+
+	dbPath := filepath.Join(a.opts.StoreDir, "wacli.db")
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open verificatie-connectie: %v", err)
+	}
+	defer raw.Close()
+
+	var name string
+	if err := raw.QueryRow(`SELECT name FROM chats WHERE jid = ?`, group.ToNonAD().String()).Scan(&name); err != nil {
+		t.Fatalf("chat niet in database gevonden: %v", err)
+	}
+	if name != "Amsteldorpkidz" {
+		t.Errorf("chatnaam in db = %q, wil Amsteldorpkidz (naamgeving mag niet veranderen)", name)
+	}
+}

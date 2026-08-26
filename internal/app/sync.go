@@ -298,7 +298,37 @@ func chatKind(chat types.JID) string {
 
 func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error {
 	chatJID := pm.Chat.ToNonAD().String()
-	chatName := a.wa.ResolveChatName(ctx, pm.Chat, pm.PushName)
+
+	// Groepen (en broadcast-lijsten) lossen hun naam op uit dezelfde gecachete
+	// groepsinfo die verderop ook voor de metadata-write wordt hergebruikt.
+	// a.wa.ResolveChatName deed voor groepen zelf een ongecachete
+	// GetGroupInfo-aanroep (internal/wa/client.go): vóór de cache hieronder
+	// ooit bereikt werd, was er dus alsnog één netwerkronde per bericht. Door
+	// hier zelf wa.ChatDisplayName aan te roepen met de gecachete info blijft
+	// er precies één ronde per groep per TTL over, niet één per bericht.
+	//
+	// Voor DM's blijft a.wa.ResolveChatName ongewijzigd het pad (adresboek,
+	// LID->PN-mapping, enz.) — die prioriteitslogica wordt hier niet
+	// gedupliceerd, alleen hergebruikt via wa.ChatDisplayName.
+	var gi *types.GroupInfo
+	isGroupChat := pm.Chat.Server == types.GroupServer || pm.Chat.IsBroadcastList()
+	var chatName string
+	if isGroupChat {
+		gi, _ = a.groupInfoCached(ctx, pm.Chat)
+		groupName := ""
+		if gi != nil {
+			groupName = gi.GroupName.Name
+		}
+		chatName = wa.ChatDisplayName(wa.ChatNameInputs{
+			Chat:       pm.Chat,
+			GroupName:  groupName,
+			PushName:   pm.PushName,
+			ResolvedPN: pm.Chat,
+		})
+	} else {
+		chatName = a.wa.ResolveChatName(ctx, pm.Chat, pm.PushName)
+	}
+
 	if err := a.db.UpsertChat(chatJID, chatKind(pm.Chat), chatName, pm.Timestamp); err != nil {
 		return err
 	}
@@ -346,8 +376,10 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 	}
 
 	// Best-effort: store group metadata (and participants) when available.
+	// Hergebruikt de gi die hierboven al (gecached) is opgehaald voor de
+	// naam, zodat dit geen tweede netwerkronde per bericht kost.
 	if pm.Chat.Server == types.GroupServer {
-		if gi, ok := a.groupInfoCached(ctx, pm.Chat); ok && gi != nil {
+		if gi != nil {
 			normalizedChat := pm.Chat.ToNonAD()
 			_ = a.db.UpsertGroup(normalizedChat.String(), gi.GroupName.Name, gi.OwnerJID.String(), gi.GroupCreated, gi.IsParent, gi.LinkedParentJID.String())
 			var ps []store.GroupParticipant
