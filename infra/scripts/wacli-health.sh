@@ -14,14 +14,18 @@
 #
 # Env overrides: WARN_HOURS (12), CRIT_HOURS (24), WACLI_STORE_DIR (~/.wacli),
 #                HA_NOTIFY_TARGET (mobile_app_wjjs_iphone), LOG_DIR
-#                (~/Library/Logs/Claude), HEARTBEAT_HOURS (6)
+#                (~/Library/Logs/Claude), HEARTBEAT_HOURS (6), WACLI_BIN
+#                (~/bin/wacli), SYNC_LOG (~/Library/Logs/Whatslack/wacli-sync.log)
+#                — de laatste twee bestaan puur om checks 1 en 2 in
+#                test-health-heartbeat.sh te kunnen stubben, zonder ooit
+#                echte device-credentials te hoeven kopiëren.
 
 set -uo pipefail
 
 STORE_DIR="${WACLI_STORE_DIR:-$HOME/.wacli}"
 DB="$STORE_DIR/wacli.db"
-WACLI_BIN="$HOME/bin/wacli"
-SYNC_LOG="$HOME/Library/Logs/Whatslack/wacli-sync.log"
+WACLI_BIN="${WACLI_BIN:-$HOME/bin/wacli}"
+SYNC_LOG="${SYNC_LOG:-$HOME/Library/Logs/Whatslack/wacli-sync.log}"
 LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/Claude}"
 LOG_FILE="$LOG_DIR/wacli-health.log"
 STATE_FILE="$LOG_DIR/.wacli-health.state"

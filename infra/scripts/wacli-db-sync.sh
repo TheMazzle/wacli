@@ -22,7 +22,9 @@ REMOTE_MEDIA="$HOME/.wacli/media/"
 LOCAL_DB="$HOME/.wacli/wacli.db"
 LOCAL_MEDIA="$HOME/.wacli/media/"
 LOG_FILE="$HOME/Library/Logs/Whatslack/wacli-sync.log"
-LOCK="$HOME/.wacli/.db-sync.lock"
+# LOCK is overridable zodat test-db-sync-stale-notify.sh de stale-run guard
+# kan testen zonder het echte lockbestand aan te raken.
+LOCK="${LOCK:-$HOME/.wacli/.db-sync.lock}"
 LOG_PREFIX="[wacli-db-sync]"
 
 # Een run die hier langer over doet is per definitie vastgelopen: de DB is
@@ -56,7 +58,9 @@ if [[ -f "$LOCK" ]]; then
         AGE=$(( NOW - ${OLD_START:-$NOW} ))
         if (( AGE > MAX_RUN_SECONDS )); then
             log "WARN: vorige run (pid $OLD_PID) hangt al ${AGE}s — opruimen"
-            NOTIFY="$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh"
+            # Overridable zodat test-db-sync-stale-notify.sh een stub kan
+            # inzetten in plaats van een echte notificatie te versturen.
+            NOTIFY="${NOTIFY:-$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh}"
             [[ -x "$NOTIFY" ]] && FORCE_NOTIFY=1 "$NOTIFY" \
                 "wacli db-sync hing ${AGE}s en is opgeruimd. Berichten liepen zolang achter." \
                 >/dev/null 2>&1
