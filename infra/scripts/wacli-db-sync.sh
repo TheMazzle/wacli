@@ -25,7 +25,11 @@ REMOTE_EXPORT="$HOME/.wacli/wacli-export.db"
 REMOTE_MEDIA="$HOME/.wacli/media/"
 LOCAL_DB="$HOME/.wacli/wacli.db"
 LOCAL_MEDIA="$HOME/.wacli/media/"
-LOG_FILE="$HOME/Library/Logs/Whatslack/wacli-sync.log"
+# Overridable zodat test-db-sync-stale-notify.sh de rotatiecheck (die vóór
+# de guard en de bereikbaarheidscheck loopt, dus buiten hun "stop vroeg"
+# bescherming valt) tegen een temp-log kan laten draaien in plaats van de
+# echte productie-sync-log te stat'en/roteren.
+LOG_FILE="${LOG_FILE:-$HOME/Library/Logs/Whatslack/wacli-sync.log}"
 # LOCK is overridable zodat test-db-sync-stale-notify.sh de stale-run guard
 # kan testen zonder het echte lockbestand aan te raken.
 LOCK="${LOCK:-$HOME/.wacli/.db-sync.lock}"
