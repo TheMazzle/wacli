@@ -347,7 +347,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 
 	// Best-effort: store group metadata (and participants) when available.
 	if pm.Chat.Server == types.GroupServer {
-		if gi, err := a.wa.GetGroupInfo(ctx, pm.Chat); err == nil && gi != nil {
+		if gi, ok := a.groupInfoCached(ctx, pm.Chat); ok && gi != nil {
 			normalizedChat := pm.Chat.ToNonAD()
 			_ = a.db.UpsertGroup(normalizedChat.String(), gi.GroupName.Name, gi.OwnerJID.String(), gi.GroupCreated, gi.IsParent, gi.LinkedParentJID.String())
 			var ps []store.GroupParticipant
@@ -610,6 +610,8 @@ func (a *App) shouldBackfillGaps() bool {
 // topic change, participant join/leave/promote/demote) into one or more
 // system messages stored in the messages table.
 func (a *App) storeGroupInfoEvent(ctx context.Context, evt *events.GroupInfo) {
+	a.invalidateGroupCache(evt.JID)
+
 	chatJID := evt.JID.ToNonAD().String()
 	chatName := ""
 	if gi, err := a.wa.GetGroupInfo(ctx, evt.JID); err == nil && gi != nil {

@@ -29,6 +29,8 @@ type fakeWA struct {
 	contacts map[types.JID]types.ContactInfo
 	groups   map[types.JID]*types.GroupInfo
 
+	groupInfoCalls int
+
 	onDemandHistory func(lastKnown types.MessageInfo, count int) *events.HistorySync
 }
 
@@ -152,6 +154,7 @@ func (f *fakeWA) GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error
 func (f *fakeWA) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.groupInfoCalls++
 	return f.groups[jid], nil
 }
 

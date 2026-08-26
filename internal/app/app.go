@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +67,9 @@ type App struct {
 	wa              WAClient
 	db              *store.DB
 	lastGapBackfill atomic.Int64 // UnixNano of last backfillDetectedGaps run
+
+	groupCacheMu sync.Mutex
+	groupCache   map[string]groupCacheEntry
 }
 
 func New(opts Options) (*App, error) {
