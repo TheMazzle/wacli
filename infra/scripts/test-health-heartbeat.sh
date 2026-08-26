@@ -4,11 +4,14 @@
 # die zelf gestopt is.
 #
 # Hermetische fixtures (WACLI_BIN/SYNC_LOG/WACLI_STORE_DIR/dummy-proces/
-# NOTIFY-stub) staan in health-test-common.sh, gedeeld met
-# test-health-rotation.sh — zie dat bestand voor waarom elk van de vier
-# checks gestubd wordt. Als deze opzet zelf geen OK-verdict oplevert, faalt
-# de test meteen met een duidelijke melding ("test is niet hermetisch") in
-# plaats van stilletjes een ander pad te testen.
+# NOTIFY-stub/HA-sentinel/OSASCRIPT-stub) staan in health-test-common.sh,
+# gedeeld met test-health-rotation.sh — zie dat bestand voor waarom elk van
+# de vier checks én alle drie notificatiekanalen gestubd worden. Als deze
+# opzet zelf geen OK-verdict oplevert, faalt de test meteen met een
+# duidelijke melding ("test is niet hermetisch") in plaats van stilletjes
+# een ander pad te testen. Scenario D hieronder is de uitzondering: die
+# forceert bewust een echte CRITICAL (om het repush-mechanisme te testen) en
+# stubt daarom zelf óók het HA-kanaal via run_health_crit — zie die functie.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -91,19 +94,51 @@ chmod +x "$CRIT_BIN_STUB"
 
 run_health_crit() {
     # $1 = werkmap (LOG_DIR), $2 = REPUSH_HOURS ("" = default van het script)
+    #
+    # Dit is de ENIGE plek in de hele test-suite die het script een echte
+    # CRITICAL laat bereiken (nodig om het repush-mechanisme te testen), dus
+    # de ENIGE plek waar kanaal 2 (Home Assistant) en kanaal 3 (osascript)
+    # ooit daadwerkelijk geactiveerd worden. HA_URL/HA_TOKEN/OSASCRIPT komen
+    # HIER expliciet mee — niet impliciet via ongezet laten. Tot 2026-08-26
+    # gebeurde dat niet: HA_URL/HA_TOKEN bleven ongezet, en wacli-health.sh
+    # las ze dan via env_value() gewoon uit de ECHTE ~/.env — elke run van
+    # Scenario D stuurde zo een ECHTE Home Assistant-push naar de telefoon
+    # van de gebruiker, met een verzonnen "device niet gekoppeld"-alarm.
+    # Zie HA_URL_STUB in health-test-common.sh voor waarom noch "ongezet
+    # laten" noch HA_URL="" hier veilig is (bash's `${VAR:-...}` behandelt
+    # expliciet-leeg hetzelfde als ongezet).
     local work="$1" rh="${2:-}"
     if [[ -n "$rh" ]]; then
         LOG_DIR="$work" WACLI_STORE_DIR="$HEALTH_STORE" WACLI_BIN="$CRIT_BIN_STUB" \
             SYNC_LOG="$SYNC_LOG_STUB" NOTIFY="$NOTIFY_STUB" REPUSH_HOURS="$rh" \
+            HA_URL="$HA_URL_STUB" HA_TOKEN="$HA_TOKEN_STUB" OSASCRIPT="$OSASCRIPT_STUB" \
             bash "$HEALTH" >/dev/null 2>&1
     else
         LOG_DIR="$work" WACLI_STORE_DIR="$HEALTH_STORE" WACLI_BIN="$CRIT_BIN_STUB" \
             SYNC_LOG="$SYNC_LOG_STUB" NOTIFY="$NOTIFY_STUB" \
+            HA_URL="$HA_URL_STUB" HA_TOKEN="$HA_TOKEN_STUB" OSASCRIPT="$OSASCRIPT_STUB" \
             bash "$HEALTH" >/dev/null 2>&1
     fi
 }
 
 notify_calls_of() { grep -c "^CALLED:" "$NOTIFY_STUB_LOG" 2>/dev/null || echo 0; }
+ha_mislukt_calls_of() { grep -c "push naar Home Assistant mislukt" "$1/wacli-health.log" 2>/dev/null || echo 0; }
+
+# Bewijst dat het Home Assistant-kanaal (kanaal 2) daadwerkelijk de
+# onbereikbare sentinel-URL gebruikte, en niet stiekem terugviel op de ECHTE
+# ~/.env-credentials: de health-log moet de MISLUKTE pushpoging melden
+# ("mislukt" — connection refused op het sentinel-adres), en NOOIT een
+# GESLAAGDE ("push verstuurd"). Zonder deze assertie zou iemand de
+# HA_URL_STUB/HA_TOKEN_STUB-override in run_health_crit stilletjes kunnen
+# weglaten (bijv. bij een toekomstige refactor) zonder dat de test-suite dat
+# opmerkt — en dan stuurt de eerstvolgende run weer een ECHTE push naar de
+# telefoon van de gebruiker, exact het lek van 2026-08-26.
+assert_ha_push_never_succeeded() {
+    local work="$1" label="$2"
+    grep -q "push verstuurd naar" "$work/wacli-health.log" 2>/dev/null \
+        && fail "$label: health-log meldt een GESLAAGDE HA-push — de sentinel-override werkt niet, dit zou in productie een ECHTE push naar de telefoon zijn geweest"
+    return 0
+}
 
 WORK_D=$(mktemp -d)
 : > "$NOTIFY_STUB_LOG"
@@ -116,7 +151,11 @@ SIG_D=$(cat "$WORK_D/.wacli-health.state")
 CALLS_1=$(notify_calls_of)
 (( CALLS_1 == 1 )) \
     || fail "eerste CRITICAL-run pushte $CALLS_1 keer, verwacht precies 1 (eerste keer dit probleem)"
-echo "==> Scenario D stap 1 OK: eerste CRITICAL pusht (1x)"
+assert_ha_push_never_succeeded "$WORK_D" "Scenario D stap 1"
+HA_MISLUKT_1=$(ha_mislukt_calls_of "$WORK_D")
+(( HA_MISLUKT_1 == 1 )) \
+    || fail "Scenario D stap 1: $HA_MISLUKT_1 mislukte HA-pushpogingen gelogd, verwacht precies 1 — het HA-pad werd niet (of niet via de sentinel) doorlopen"
+echo "==> Scenario D stap 1 OK: eerste CRITICAL pusht (1x), HA-kanaal raakte alleen de sentinel"
 
 # Tweede run, direct erna, exact dezelfde DETAIL-tekst (statisch, geen
 # tijd-element) -> zelfde SIG, nog geen REPUSH_HOURS verstreken -> GEEN
@@ -127,6 +166,10 @@ run_health_crit "$WORK_D" ""
 CALLS_2=$(notify_calls_of)
 (( CALLS_2 == CALLS_1 )) \
     || fail "aanhoudende CRITICAL pushte al vóór REPUSH_HOURS verstreken was ($CALLS_2 na run 2, verwacht $CALLS_1) — dit is precies de spam die de dedup moet voorkomen"
+assert_ha_push_never_succeeded "$WORK_D" "Scenario D stap 2"
+HA_MISLUKT_2=$(ha_mislukt_calls_of "$WORK_D")
+(( HA_MISLUKT_2 == HA_MISLUKT_1 )) \
+    || fail "Scenario D stap 2: aantal mislukte HA-pushpogingen liep op ($HA_MISLUKT_1 -> $HA_MISLUKT_2) terwijl de dedup nog geen push had mogen laten proberen"
 echo "==> Scenario D stap 2 OK: geen herhaalde push vóór REPUSH_HOURS verstreken"
 
 # REPUSH_HOURS default is 4u. Zet het laatste-push-tijdstip 5 uur terug
@@ -141,7 +184,11 @@ run_health_crit "$WORK_D" ""
 CALLS_3=$(notify_calls_of)
 (( CALLS_3 > CALLS_2 )) \
     || fail "geen herhaalde push na >REPUSH_HOURS aanhoudende CRITICAL met onveranderde detail-tekst — de kern van de fix werkt niet"
-echo "==> Scenario D stap 3 OK: aanhoudende CRITICAL pusht opnieuw na REPUSH_HOURS (default 4u)"
+assert_ha_push_never_succeeded "$WORK_D" "Scenario D stap 3"
+HA_MISLUKT_3=$(ha_mislukt_calls_of "$WORK_D")
+(( HA_MISLUKT_3 > HA_MISLUKT_2 )) \
+    || fail "Scenario D stap 3: geen extra mislukte HA-pushpoging na de repush — het HA-kanaal deed niet mee aan de repush-test"
+echo "==> Scenario D stap 3 OK: aanhoudende CRITICAL pusht opnieuw na REPUSH_HOURS (default 4u), HA-kanaal raakte alleen de sentinel"
 
 echo "==> Scenario D OK: repush-mechanisme voor aanhoudende CRITICAL met statische detail-tekst"
 

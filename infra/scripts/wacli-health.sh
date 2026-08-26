@@ -17,11 +17,13 @@
 #                (~/Library/Logs/Claude), HEARTBEAT_HOURS (6), REPUSH_HOURS (4),
 #                WACLI_BIN (~/bin/wacli), SYNC_LOG
 #                (~/Library/Logs/Whatslack/wacli-sync.log),
-#                NOTIFY (~/Projects/bjorn-supervisor/infra/scripts/notify-user.sh)
-#                — deze bestaan puur om alle vier checks in de
-#                test-health-*.sh tests te kunnen stubben, zonder ooit echte
-#                device-credentials te hoeven kopiëren of een echte
-#                notificatie te versturen.
+#                NOTIFY (~/Projects/bjorn-supervisor/infra/scripts/notify-user.sh),
+#                OSASCRIPT (osascript), HA_URL/HA_TOKEN (anders: gelezen uit
+#                ~/.env — zie de toelichting bij die twee hieronder)
+#                — deze bestaan puur om alle vier checks EN alle drie
+#                notificatiekanalen in de test-health-*.sh tests te kunnen
+#                stubben, zonder ooit echte device-credentials te hoeven
+#                kopiëren of een echte notificatie te versturen.
 
 set -uo pipefail
 
@@ -35,6 +37,7 @@ STATE_FILE="$LOG_DIR/.wacli-health.state"
 PUSH_STATE_FILE="$LOG_DIR/.wacli-health.last-push"
 NOTIFY="${NOTIFY:-$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh}"
 HA_NOTIFY_TARGET="${HA_NOTIFY_TARGET:-mobile_app_wjjs_iphone}"
+OSASCRIPT="${OSASCRIPT:-osascript}"
 
 WARN_HOURS="${WARN_HOURS:-12}"
 CRIT_HOURS="${CRIT_HOURS:-24}"
@@ -220,8 +223,17 @@ if [[ "$LEVEL" == "CRITICAL" ]]; then
         [[ -f "$HOME/.env" ]] || return
         sed -n "s/^[[:space:]]*$1=//p" "$HOME/.env" | head -1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"
     }
-    HA_URL="${HA_URL:-$(env_value HA_URL)}"
-    HA_TOKEN="${HA_TOKEN:-$(env_value HA_TOKEN)}"
+    # LET OP: ${VAR-default} (zonder dubbele punt), NIET ${VAR:-default}.
+    # Met ":-" behandelt bash "expliciet leeg" en "niet gezet" identiek, dus
+    # een test die HA_URL="" meegeeft om een echte push te voorkomen zou
+    # alsnog in env_value() en dus in de ECHTE ~/.env-credentials terecht
+    # komen — precies het lek dat test-health-heartbeat.sh Scenario D ooit
+    # veroorzaakte (2026-08-26). Zonder de dubbele punt wint een expliciet
+    # (ook leeg) gezette waarde altijd; alleen als de variabele HELEMAAL niet
+    # in de omgeving staat — het normale productiepad — valt dit terug op
+    # ~/.env, exact zoals voorheen.
+    HA_URL="${HA_URL-$(env_value HA_URL)}"
+    HA_TOKEN="${HA_TOKEN-$(env_value HA_TOKEN)}"
 
     if [[ -n "${HA_URL:-}" && -n "${HA_TOKEN:-}" ]]; then
         /usr/bin/curl -s -m 10 -o /dev/null \
@@ -243,6 +255,6 @@ print(json.dumps({
 fi
 
 # 3. Lokale notificatie op de Mac Mini (geen scherm, maar wel zichtbaar bij VNC)
-osascript -e "display notification \"$(echo "$MSG" | sed 's/"/\\"/g')\" with title \"wacli sync\" subtitle \"$LEVEL\" sound name \"Sosumi\"" >/dev/null 2>&1
+"$OSASCRIPT" -e "display notification \"$(echo "$MSG" | sed 's/"/\\"/g')\" with title \"wacli sync\" subtitle \"$LEVEL\" sound name \"Sosumi\"" >/dev/null 2>&1
 
 exit 0

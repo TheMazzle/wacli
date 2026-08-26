@@ -4,8 +4,9 @@
 # wordt gesourced, niet direct uitgevoerd.
 #
 # Forceert een deterministische OK-verdict af zonder ooit echte
-# device-credentials (session.db) aan te raken, en stubt NOTIFY zodat een
-# onverwacht niet-OK-pad — bijvoorbeeld door een toekomstige regressie —
+# device-credentials (session.db) aan te raken, en stubt alle DRIE
+# notificatiekanalen zodat een onverwacht niet-OK-pad — bijvoorbeeld door
+# een toekomstige regressie, of een test die bewust CRITICAL forceert —
 # nooit een echte macOS-notificatie of Home Assistant-push kan versturen:
 #   1. SYNC_LOG   -> lege temp-file, dus nooit een [FATAL]-regel.
 #   2. WACLI_BIN  -> stub die altijd `{"authenticated":true,...}` teruggeeft.
@@ -19,6 +20,18 @@
 #   5. NOTIFY -> stub die alleen zijn argumenten wegschrijft (defense in
 #      depth: als de hermetische opzet ooit toch een niet-OK-verdict
 #      oplevert, mag er nog steeds geen echte notificatie uit).
+#   6. HA_URL/HA_TOKEN -> gezet naar een gegarandeerd onbereikbaar
+#      localhost-sentinel (poort 1, connection refused, geen timeout) plus
+#      een evident nep-token. NOOIT leeg laten (""): wacli-health.sh leest
+#      HA_URL/HA_TOKEN via `${VAR-...}` (zie de toelichting daar) — een
+#      HELEMAAL niet gezette variabele valt terug op de ECHTE ~/.env, een
+#      wél (ook leeg) gezette variabele niet. Een niet-lege sentinel-waarde
+#      wint dus altijd, ongeacht of die val-terug-logica ooit weer stuk gaat.
+#      Dit was tot 2026-08-26 het lek waardoor Scenario D in
+#      test-health-heartbeat.sh een ECHTE Home Assistant-push naar de
+#      telefoon stuurde.
+#   7. OSASCRIPT -> stub die alleen wegschrijft dat hij aangeroepen is, zodat
+#      een test-run nooit een echte desktop-notificatie kan laten verschijnen.
 #
 # Gebruik in een test:
 #   source "$(dirname "${BASH_SOURCE[0]}")/health-test-common.sh"
@@ -55,6 +68,22 @@ STUB
     NOTIFY_STUB_LOG="$HEALTH_FIXTURES/notify.log"
     export NOTIFY_STUB_LOG
 
+    # Onbereikbaar localhost-sentinel (poort 1: connection refused, geen
+    # 10s-timeout) + een evident nep-token. Nooit "" — zie de toelichting
+    # bovenaan dit bestand voor waarom leeg NIET hetzelfde is als veilig.
+    HA_URL_STUB="http://127.0.0.1:1"
+    HA_TOKEN_STUB="test-sentinel-token-not-real"
+
+    OSASCRIPT_STUB="$HEALTH_FIXTURES/fake-osascript"
+    cat > "$OSASCRIPT_STUB" <<'STUB'
+#!/bin/bash
+echo "CALLED:$*" >> "$OSASCRIPT_STUB_LOG"
+exit 0
+STUB
+    chmod +x "$OSASCRIPT_STUB"
+    OSASCRIPT_STUB_LOG="$HEALTH_FIXTURES/osascript.log"
+    export OSASCRIPT_STUB_LOG
+
     HEALTH_STORE="$HEALTH_FIXTURES/store"
     mkdir -p "$HEALTH_STORE"
     sqlite3 "$HEALTH_STORE/wacli.db" \
@@ -81,10 +110,12 @@ run_health() {
     if [[ -n "$hh" ]]; then
         LOG_DIR="$work" WACLI_STORE_DIR="$HEALTH_STORE" WACLI_BIN="$WACLI_BIN_STUB" \
             SYNC_LOG="$SYNC_LOG_STUB" NOTIFY="$NOTIFY_STUB" HEARTBEAT_HOURS="$hh" \
+            HA_URL="$HA_URL_STUB" HA_TOKEN="$HA_TOKEN_STUB" OSASCRIPT="$OSASCRIPT_STUB" \
             bash "$HEALTH" >/dev/null 2>&1
     else
         LOG_DIR="$work" WACLI_STORE_DIR="$HEALTH_STORE" WACLI_BIN="$WACLI_BIN_STUB" \
             SYNC_LOG="$SYNC_LOG_STUB" NOTIFY="$NOTIFY_STUB" \
+            HA_URL="$HA_URL_STUB" HA_TOKEN="$HA_TOKEN_STUB" OSASCRIPT="$OSASCRIPT_STUB" \
             bash "$HEALTH" >/dev/null 2>&1
     fi
 }
