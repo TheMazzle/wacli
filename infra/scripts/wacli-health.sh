@@ -13,7 +13,8 @@
 #   4. daemon proces aanwezig        -> zwakste check, staat bewust laatst
 #
 # Env overrides: WARN_HOURS (12), CRIT_HOURS (24), WACLI_STORE_DIR (~/.wacli),
-#                HA_NOTIFY_TARGET (mobile_app_wjjs_iphone)
+#                HA_NOTIFY_TARGET (mobile_app_wjjs_iphone), LOG_DIR
+#                (~/Library/Logs/Claude), HEARTBEAT_HOURS (6)
 
 set -uo pipefail
 
@@ -21,7 +22,7 @@ STORE_DIR="${WACLI_STORE_DIR:-$HOME/.wacli}"
 DB="$STORE_DIR/wacli.db"
 WACLI_BIN="$HOME/bin/wacli"
 SYNC_LOG="$HOME/Library/Logs/Whatslack/wacli-sync.log"
-LOG_DIR="$HOME/Library/Logs/Claude"
+LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/Claude}"
 LOG_FILE="$LOG_DIR/wacli-health.log"
 STATE_FILE="$LOG_DIR/.wacli-health.state"
 NOTIFY="$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh"
@@ -30,7 +31,21 @@ HA_NOTIFY_TARGET="${HA_NOTIFY_TARGET:-mobile_app_wjjs_iphone}"
 WARN_HOURS="${WARN_HOURS:-12}"
 CRIT_HOURS="${CRIT_HOURS:-24}"
 
+# Ook bij "alles in orde" periodiek een regel schrijven. Zonder levensteken is
+# een stille log niet te onderscheiden van een monitor die zelf gestopt is.
+# Een vaste kloktijd werkt niet: de LaunchAgent draait elke 1800s vanaf het
+# laadmoment, dus altijd op dezelfde minuut — een match op "09:00" raakt nooit.
+HEARTBEAT_HOURS="${HEARTBEAT_HOURS:-6}"
+MAX_LOG_BYTES=$(( 5 * 1024 * 1024 ))
+
 mkdir -p "$LOG_DIR"
+
+if [[ -f "$LOG_FILE" ]]; then
+    SIZE=$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    if (( SIZE > MAX_LOG_BYTES )); then
+        mv -f "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null || true
+    fi
+fi
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
@@ -137,8 +152,13 @@ echo "$SIG" > "$STATE_FILE"
 if [[ "$LEVEL" == "OK" ]]; then
     if [[ "$PREV" != "$SIG" ]]; then
         log "OK: nieuwste bericht ${AGE_HOURS}u oud (hersteld)"
-    elif [[ "$(date '+%H:%M')" == "09:00" ]]; then
-        log "OK: nieuwste bericht ${AGE_HOURS}u oud"
+    else
+        # Levensteken op basis van verstreken tijd, niet van een kloktijd.
+        LAST_MOD=$(stat -f%m "$LOG_FILE" 2>/dev/null || echo 0)
+        AGE_SECONDS=$(( $(date +%s) - LAST_MOD ))
+        if (( AGE_SECONDS >= HEARTBEAT_HOURS * 3600 )); then
+            log "OK: nieuwste bericht ${AGE_HOURS}u oud"
+        fi
     fi
     exit 0
 fi

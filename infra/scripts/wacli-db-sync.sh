@@ -56,6 +56,10 @@ if [[ -f "$LOCK" ]]; then
         AGE=$(( NOW - ${OLD_START:-$NOW} ))
         if (( AGE > MAX_RUN_SECONDS )); then
             log "WARN: vorige run (pid $OLD_PID) hangt al ${AGE}s — opruimen"
+            NOTIFY="$HOME/Projects/bjorn-supervisor/infra/scripts/notify-user.sh"
+            [[ -x "$NOTIFY" ]] && FORCE_NOTIFY=1 "$NOTIFY" \
+                "wacli db-sync hing ${AGE}s en is opgeruimd. Berichten liepen zolang achter." \
+                >/dev/null 2>&1
             pkill -P "$OLD_PID" 2>/dev/null
             kill -9 "$OLD_PID" 2>/dev/null
             sleep 1
