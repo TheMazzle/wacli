@@ -14,7 +14,8 @@ func MediaTypeFromString(mediaType string) (whatsmeow.MediaType, error) {
 	switch strings.ToLower(strings.TrimSpace(mediaType)) {
 	case "image":
 		return whatsmeow.MediaImage, nil
-	case "video":
+	case "video", "gif":
+		// Een GIF is op het protocol een VideoMessage met gifPlayback (mp4).
 		return whatsmeow.MediaVideo, nil
 	case "audio":
 		return whatsmeow.MediaAudio, nil
