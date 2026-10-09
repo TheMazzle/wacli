@@ -96,7 +96,26 @@ func (h *syncHandler) SendReaction(chatJID, msgID, emoji string, targetFromMe bo
 		return fmt.Errorf("parse chat JID: %w", err)
 	}
 
-	reactionMsgID, err := h.app.WA().SendReaction(ctx, chatJIDParsed, msgID, emoji, targetFromMe)
+	// In een groep moet de reactie de afzender van het doelbericht noemen.
+	// Zonder die afzender komt hij nergens aan, dus dan liever een fout dan
+	// een reactie die alleen lokaal lijkt te bestaan.
+	var senderJID types.JID
+	isDirect := chatJIDParsed.Server == types.DefaultUserServer || chatJIDParsed.Server == types.HiddenUserServer
+	if !targetFromMe && !isDirect {
+		target, err := h.app.DB().GetMessage(chatJIDParsed.String(), msgID)
+		if err != nil {
+			return fmt.Errorf("doelbericht %s niet gevonden: %w", msgID, err)
+		}
+		if target.SenderJID == "" {
+			return fmt.Errorf("afzender van bericht %s onbekend; reactie kan niet worden geadresseerd", msgID)
+		}
+		senderJID, err = types.ParseJID(target.SenderJID)
+		if err != nil {
+			return fmt.Errorf("parse sender JID %q: %w", target.SenderJID, err)
+		}
+	}
+
+	reactionMsgID, err := h.app.WA().SendReaction(ctx, chatJIDParsed, senderJID, msgID, emoji, targetFromMe)
 	if err != nil {
 		return fmt.Errorf("send reaction: %w", err)
 	}

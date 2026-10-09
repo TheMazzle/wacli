@@ -222,7 +222,26 @@ func (c *Client) SendReply(ctx context.Context, to types.JID, text, replyToMsgID
 	return resp.ID, nil
 }
 
-func (c *Client) SendReaction(ctx context.Context, to types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error) {
+// BuildReactionKey bouwt de MessageKey waarmee een reactie naar zijn doelbericht
+// verwijst. In een groep hoort daar de afzender van dat bericht bij
+// (Participant); zonder accepteert de server de reactie wel, maar kan geen
+// client hem aan een bericht koppelen en is hij nergens te zien.
+func BuildReactionKey(chat, sender types.JID, targetMsgID string, fromMe bool) *waProto.MessageKey {
+	key := &waProto.MessageKey{
+		RemoteJID: proto.String(chat.String()),
+		FromMe:    proto.Bool(fromMe),
+		ID:        proto.String(targetMsgID),
+	}
+	isDirect := chat.Server == types.DefaultUserServer || chat.Server == types.HiddenUserServer
+	if !fromMe && !isDirect && !sender.IsEmpty() {
+		key.Participant = proto.String(sender.ToNonAD().String())
+	}
+	return key
+}
+
+// SendReaction reageert op targetMsgID in chat `to`. sender is de afzender van
+// het doelbericht; verplicht voor groepsberichten van anderen.
+func (c *Client) SendReaction(ctx context.Context, to, sender types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error) {
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
@@ -231,11 +250,7 @@ func (c *Client) SendReaction(ctx context.Context, to types.JID, targetMsgID, em
 	}
 	msg := &waProto.Message{
 		ReactionMessage: &waProto.ReactionMessage{
-			Key: &waProto.MessageKey{
-				RemoteJID: proto.String(to.String()),
-				FromMe:    proto.Bool(fromMe),
-				ID:        proto.String(targetMsgID),
-			},
+			Key:               BuildReactionKey(to, sender, targetMsgID, fromMe),
 			Text:              proto.String(emoji),
 			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
 		},

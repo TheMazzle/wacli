@@ -41,3 +41,59 @@ func TestBestContactName(t *testing.T) {
 		t.Fatalf("expected push name")
 	}
 }
+
+// Regressie: SendReaction zette geen Participant in de MessageKey. In een
+// groep weet WhatsApp dan niet op wiens bericht de reactie slaat; de server
+// accepteert hem, maar geen enkele client toont hem. Op 2026-10-09 kwamen zo
+// zeven reacties op een groepsbericht nergens aan.
+func TestBuildReactionKeyGroupMessageFromOtherHasParticipant(t *testing.T) {
+	chat, _ := ParseUserOrJID("120363265298442716@g.us")
+	sender, _ := ParseUserOrJID("171743025057880@lid")
+
+	key := BuildReactionKey(chat, sender, "ACCE2C39", false)
+
+	if key.GetParticipant() != "171743025057880@lid" {
+		t.Fatalf("participant = %q, want de afzender van het bericht", key.GetParticipant())
+	}
+	if key.GetFromMe() {
+		t.Fatalf("fromMe moet false zijn")
+	}
+	if key.GetRemoteJID() != chat.String() || key.GetID() != "ACCE2C39" {
+		t.Fatalf("remoteJID/id kloppen niet: %v", key)
+	}
+}
+
+func TestBuildReactionKeyStripsDeviceFromParticipant(t *testing.T) {
+	chat, _ := ParseUserOrJID("123@g.us")
+	sender, _ := ParseUserOrJID("31612345678:12@s.whatsapp.net")
+
+	key := BuildReactionKey(chat, sender, "ID1", false)
+
+	if key.GetParticipant() != "31612345678@s.whatsapp.net" {
+		t.Fatalf("participant = %q, want zonder device-deel", key.GetParticipant())
+	}
+}
+
+func TestBuildReactionKeyOwnGroupMessageHasNoParticipant(t *testing.T) {
+	chat, _ := ParseUserOrJID("123@g.us")
+	sender, _ := ParseUserOrJID("171743025057880@lid")
+
+	key := BuildReactionKey(chat, sender, "ID1", true)
+
+	if key.Participant != nil {
+		t.Fatalf("eigen bericht hoort geen participant te hebben, kreeg %q", key.GetParticipant())
+	}
+	if !key.GetFromMe() {
+		t.Fatalf("fromMe moet true zijn")
+	}
+}
+
+func TestBuildReactionKeyDirectChatHasNoParticipant(t *testing.T) {
+	chat, _ := ParseUserOrJID("31612345678@s.whatsapp.net")
+
+	key := BuildReactionKey(chat, chat, "ID1", false)
+
+	if key.Participant != nil {
+		t.Fatalf("1-op-1 hoort geen participant te hebben, kreeg %q", key.GetParticipant())
+	}
+}

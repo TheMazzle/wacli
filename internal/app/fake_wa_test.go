@@ -223,7 +223,7 @@ func (f *fakeWA) SendReply(ctx context.Context, to types.JID, text, replyToMsgID
 	return types.MessageID("msgid"), nil
 }
 
-func (f *fakeWA) SendReaction(ctx context.Context, to types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error) {
+func (f *fakeWA) SendReaction(ctx context.Context, to, sender types.JID, targetMsgID, emoji string, fromMe bool) (types.MessageID, error) {
 	return types.MessageID("msgid"), nil
 }
 
