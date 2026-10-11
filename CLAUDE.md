@@ -77,11 +77,13 @@ lsof ~/.wacli/wacli.sock    # Process moet actief zijn
 - **Handler interface** in `internal/ipc/ipc.go`: elke command = 1 method op Handler interface
 - **Implementatie** in `cmd/wacli/sync.go`: `syncHandler` struct implementeert Handler
 
-### Automatisch gaten vullen staat UIT
-De daemon draait met `--backfill-gaps=false` (zie `infra/scripts/wacli-sync.sh`). Elk
-history-verzoek aan de telefoon geeft daar een notificatie "syncing on another device";
-WJ vond dat ook met 5 verzoeken per keer te veel (2026-10-12). Niet weer aanzetten zonder
-te vragen. Handmatig aanvullen loopt via de IPC-command `backfill` vanuit Whatslack.
+### Automatisch gaten vullen: hooguit één verzoek per dag
+Elk history-verzoek aan de telefoon geeft daar een notificatie "syncing on another device".
+WJ vond 20 en ook 5 per keer te veel; één per dag is acceptabel (2026-10-12). Vastgelegd in
+`maxBackfillRequests` en `gapBackfillCooldown` (`internal/app/sync.go`); de afkoeltijd staat in
+de database en overleeft dus een herstart. Elk gat wordt hooguit eens per 30 dagen geprobeerd.
+Niet verhogen zonder te vragen. Het verzoek gaat mee bij een (her)verbinding, niet op een vast
+tijdstip. Handmatig aanvullen loopt via de IPC-command `backfill` vanuit Whatslack.
 
 ### Backfill Pattern
 **BELANGRIJK:** Er zijn twee backfill-patronen in de codebase:

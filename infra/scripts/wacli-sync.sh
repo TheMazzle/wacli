@@ -31,9 +31,9 @@ fi
 
 # Elke regel krijgt een ISO-8601 datumstempel. stdout gaat via launchd
 # (StandardOutPath) naar $LOG_FILE, dus hier niet zelf naar het bestand schrijven.
-# --backfill-gaps=false (WJ 2026-10-12): automatisch gaten vullen vraagt de
-# telefoon om geschiedenis, en elk verzoek geeft daar een "syncing on another
-# device"-notificatie. Dat was hinderlijk, ook met nog maar 5 verzoeken per
-# keer. Handmatig aanvullen kan via Whatslack (gat-balk, "Sync older").
-exec /Users/wjj/bin/wacli sync --download-media --follow --backfill-gaps=false 2>&1 \
+# --backfill-gaps: automatisch gaten vullen vraagt de telefoon om geschiedenis,
+# en elk verzoek geeft daar een "syncing on another device"-notificatie. wacli
+# doet er daarom hooguit één per dag (WJ 2026-10-12; zie maxBackfillRequests en
+# gapBackfillCooldown in internal/app/sync.go). Meer kan handmatig via Whatslack.
+exec /Users/wjj/bin/wacli sync --download-media --follow --backfill-gaps 2>&1 \
   | /usr/bin/perl -MPOSIX -pe 'BEGIN { $| = 1 } $_ = POSIX::strftime("%Y-%m-%dT%H:%M:%S%z ", localtime) . $_'

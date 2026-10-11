@@ -655,9 +655,10 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 }
 
 const (
-	gapBackfillCooldown = 6 * time.Hour
-	// Laag gehouden: elk verzoek is een notificatie op de telefoon.
-	maxBackfillRequests = 5
+	// Eén verzoek per dag (WJ 2026-10-12): elk verzoek is een notificatie op de
+	// telefoon, en één per dag is wat hij acceptabel vindt.
+	gapBackfillCooldown = 24 * time.Hour
+	maxBackfillRequests = 1
 	// Na zoveel tijd mag een niet-gevuld gat nog eens geprobeerd worden.
 	gapRetryInterval = 30 * 24 * time.Hour
 )
