@@ -571,15 +571,20 @@ func mediaLabel(mediaType string) string {
 // WhatsApp connection. Responses are handled by the HistorySync event handler
 // that's already registered in Sync().
 func (a *App) backfillDetectedGaps(ctx context.Context) {
+	// De afkoeltijd geldt ook over herstarts heen: elk verzoek laat de telefoon
+	// een "syncing on another device"-notificatie tonen.
+	if !a.shouldBackfillGaps() {
+		return
+	}
+
 	chats, err := a.db.ListChatsWithMessages()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[backfill] Failed to list chats: %v\n", err)
 		return
 	}
 
-	const minGapSecs = 21600       // 6 hours
-	const maxBackfillRequests = 20 // cap to avoid rate limiting / ban risk
-	var totalGaps int
+	const minGapSecs = 21600 // 6 hours
+	retryAfter := time.Now().Add(-gapRetryInterval)
 	var requestsSent int
 
 	for _, chat := range chats {
@@ -595,13 +600,14 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 			continue
 		}
 
-		totalGaps += len(gaps)
-		fmt.Fprintf(os.Stderr, "[backfill] %s: %d gap(s) detected\n", chat.Name, len(gaps))
-
-		// Request history for the most recent gap only (to avoid flooding).
-		// The response will fill in messages, and subsequent restarts will
-		// catch remaining gaps.
+		// Alleen het meest recente gat, en elk gat maar één keer per
+		// gapRetryInterval. Een gat dat de telefoon niet kan vullen bleef
+		// anders bij elke run opnieuw opgevraagd worden, zonder einde.
 		gap := gaps[len(gaps)-1]
+		if tried, err := a.db.BackfillAttemptedSince(chat.JID, gap.AfterTS, retryAfter); err != nil || tried {
+			continue
+		}
+
 		msgInfo, err := a.db.GetMessageInfoNear(chat.JID, gap.AfterTS)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[backfill] %s: failed to get message info: %v\n", chat.Name, err)
@@ -622,9 +628,11 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 			Timestamp: msgInfo.Timestamp,
 		}
 
-		fmt.Fprintf(os.Stderr, "[backfill] %s: requesting 50 messages before gap at %s\n",
-			chat.Name, msgInfo.Timestamp.Format("15:04:05"))
+		fmt.Fprintf(os.Stderr, "[backfill] %s: %d gap(s), requesting 50 messages before gap at %s\n",
+			chat.Name, len(gaps), msgInfo.Timestamp.Format("2006-01-02 15:04:05"))
 
+		// Ook een mislukt verzoek telt als poging: anders blijft het zich herhalen.
+		_ = a.db.RecordBackfillAttempt(chat.JID, gap.AfterTS, time.Now())
 		if _, err := a.wa.RequestHistorySyncOnDemand(ctx, reqInfo, 50); err != nil {
 			fmt.Fprintf(os.Stderr, "[backfill] %s: request failed: %v\n", chat.Name, err)
 			continue
@@ -635,29 +643,39 @@ func (a *App) backfillDetectedGaps(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After(backfillRequestDelay):
 		}
 	}
 
-	if totalGaps > 0 {
-		skipped := totalGaps - requestsSent
-		fmt.Fprintf(os.Stderr, "[backfill] Sent %d request(s) for %d gap(s).", requestsSent, totalGaps)
-		if skipped > 0 {
-			fmt.Fprintf(os.Stderr, " Skipped %d (rate limit cap %d).", skipped, maxBackfillRequests)
-		}
-		fmt.Fprintln(os.Stderr, " Responses arrive via history sync events (best-effort).")
+	if requestsSent > 0 {
+		fmt.Fprintf(os.Stderr, "[backfill] Sent %d request(s) (max %d per run). Responses arrive via history sync events (best-effort).\n",
+			requestsSent, maxBackfillRequests)
 	}
 	a.lastGapBackfill.Store(time.Now().UnixNano())
 }
 
-const gapBackfillCooldown = 6 * time.Hour
+const (
+	gapBackfillCooldown = 6 * time.Hour
+	// Laag gehouden: elk verzoek is een notificatie op de telefoon.
+	maxBackfillRequests = 5
+	// Na zoveel tijd mag een niet-gevuld gat nog eens geprobeerd worden.
+	gapRetryInterval = 30 * 24 * time.Hour
+)
+
+// backfillRequestDelay is de pauze tussen twee verzoeken (var voor tests).
+var backfillRequestDelay = 5 * time.Second
 
 func (a *App) shouldBackfillGaps() bool {
-	last := a.lastGapBackfill.Load()
-	if last == 0 {
-		return true
+	last := time.Unix(0, a.lastGapBackfill.Load())
+	if a.lastGapBackfill.Load() == 0 {
+		// Net gestart: de laatste poging staat in de database.
+		stored, err := a.db.LastBackfillAttempt()
+		if err != nil || stored.IsZero() {
+			return true
+		}
+		last = stored
 	}
-	return time.Since(time.Unix(0, last)) >= gapBackfillCooldown
+	return time.Since(last) >= gapBackfillCooldown
 }
 
 // storeGroupInfoEvent converts a whatsmeow GroupInfo event (name change,

@@ -191,6 +191,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureBackfillAttemptsTable(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
