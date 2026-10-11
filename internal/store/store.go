@@ -187,6 +187,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureReceiptsTable(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

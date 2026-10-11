@@ -40,6 +40,20 @@ type SyncResult struct {
 	MessagesStored int64
 }
 
+// receiptKind vertaalt een WhatsApp-melding naar een afleverstap. Andere
+// soorten (retry, server-error, eigen apparaten) zeggen niets over aflevering.
+func receiptKind(t types.ReceiptType) (store.ReceiptKind, bool) {
+	switch t {
+	case types.ReceiptTypeDelivered:
+		return store.ReceiptDelivered, true
+	case types.ReceiptTypeRead:
+		return store.ReceiptRead, true
+	case types.ReceiptTypePlayed:
+		return store.ReceiptPlayed, true
+	}
+	return 0, false
+}
+
 func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if opts.Mode == "" {
 		opts.Mode = SyncModeFollow
@@ -149,6 +163,14 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 			}
 			fmt.Fprintf(os.Stderr, "\rSynced %d messages...", messagesStored.Load())
 		case *events.Receipt:
+			// Afleverstatus per bericht en ontvanger (vinkjes in Whatslack). Alleen
+			// meldingen van anderen: die gaan altijd over een bericht van ons.
+			if kind, ok := receiptKind(v.Type); ok && !v.IsFromMe && !v.Sender.IsEmpty() {
+				ts := v.Timestamp.UTC().Unix()
+				for _, id := range v.MessageIDs {
+					_ = a.db.RecordReceipt(v.Chat.ToNonAD().String(), string(id), v.Sender.ToNonAD().String(), kind, ts)
+				}
+			}
 			// Track read state: ReceiptTypeReadSelf = we read on another device (e.g. phone),
 			// ReceiptTypeRead = someone else read our message.
 			if v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypeReadSelf {

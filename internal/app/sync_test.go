@@ -256,3 +256,60 @@ func TestSyncOnceIdleExit(t *testing.T) {
 		t.Fatalf("expected to exit quickly on idle, took %s", time.Since(start))
 	}
 }
+
+// Vinkjes in Whatslack: afgeleverd- en gelezen-meldingen van anderen worden per
+// bericht en per ontvanger opgeslagen. Meldingen van eigen apparaten tellen niet.
+func TestSyncStoresDeliveryAndReadReceipts(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+
+	group := types.JID{User: "120363265298442716", Server: types.GroupServer}
+	alice := types.JID{User: "111", Server: types.HiddenUserServer}
+	bob := types.JID{User: "222", Server: types.HiddenUserServer}
+	me := types.JID{User: "999", Server: types.HiddenUserServer}
+	t0 := time.Date(2026, 10, 11, 22, 0, 0, 0, time.UTC)
+
+	receipt := func(sender types.JID, fromMe bool, typ types.ReceiptType, at time.Time, ids ...types.MessageID) *events.Receipt {
+		return &events.Receipt{
+			MessageSource: types.MessageSource{Chat: group, Sender: sender, IsFromMe: fromMe, IsGroup: true},
+			MessageIDs:    ids,
+			Timestamp:     at,
+			Type:          typ,
+		}
+	}
+	f.connectEvents = []interface{}{
+		receipt(alice, false, types.ReceiptTypeDelivered, t0, "M1", "M2"),
+		receipt(alice, false, types.ReceiptTypeRead, t0.Add(time.Minute), "M1"),
+		receipt(bob, false, types.ReceiptTypeDelivered, t0.Add(2*time.Minute), "M1"),
+		receipt(me, true, types.ReceiptTypeReadSelf, t0.Add(3*time.Minute), "M1"),
+		receipt(bob, false, types.ReceiptTypeRetry, t0.Add(4*time.Minute), "M2"),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := a.Sync(ctx, SyncOptions{Mode: SyncModeFollow, AllowQR: false}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	m1, err := a.db.GetMessageReceipts("M1")
+	if err != nil {
+		t.Fatalf("GetMessageReceipts: %v", err)
+	}
+	if len(m1) != 2 {
+		t.Fatalf("M1: verwachtte 2 ontvangers (alice, bob), kreeg %+v", m1)
+	}
+	if m1[0].UserJID != alice.String() || m1[0].DeliveredTS != t0.Unix() || m1[0].ReadTS != t0.Add(time.Minute).Unix() {
+		t.Fatalf("alice = %+v", m1[0])
+	}
+	if m1[1].UserJID != bob.String() || m1[1].ReadTS != 0 {
+		t.Fatalf("bob = %+v", m1[1])
+	}
+	m2, _ := a.db.GetMessageReceipts("M2")
+	if len(m2) != 1 || m2[0].UserJID != alice.String() {
+		t.Fatalf("M2: alleen alice' aflevering telt (retry is geen aflevering), kreeg %+v", m2)
+	}
+}
