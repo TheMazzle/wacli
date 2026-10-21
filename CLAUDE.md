@@ -103,6 +103,7 @@ wacli draait alleen op Mac Mini. MacBook krijgt data via SSH sync:
 - **Media sync:** rsync `~/.wacli/media/` (exclusief `status_broadcast/`) → MacBook `~/.wacli/media/`
 - **Installeren/updaten op MacBook:** `scp macmini:~/Projects/wacli/infra/scripts/wacli-db-sync.sh ~/bin/wacli-db-sync.sh` (idem `wacli-tunnel.sh`, daarna `launchctl kickstart -k gui/$(id -u)/com.productfunction.wacli-tunnel`)
 - **Twee routes naar de Mini:** eerst `macmini` (Tailscale), dan `macmini-m4.fritz.box` (LAN). Op 2026-10-21 lag de sync 9 dagen stil omdat alleen Tailscale werd geprobeerd en Tailscale op de MacBook uit stond. Een nieuwe MacBook heeft de LAN-host-key nodig in `known_hosts` (`ssh-keyscan -t ed25519 macmini-m4.fritz.box`, fingerprint vergelijken).
+- **Oude berichten op de MacBook:** eerst de mtime van `~/.wacli/wacli-export.db` op de Mini (elke ophaalronde schrijft hem), dan `wacli-sync.log` op de MacBook. Meestal is de Mini in orde.
 - **Melding:** is er >2 uur geen geslaagde sync (`~/.wacli/.db-sync.last-ok`), dan komt er op de MacBook een macOS-notificatie, hooguit eens per 6 uur. Test: `infra/scripts/test-db-sync-unreachable-alert.sh`
 - **IPC commando's** (send, react, download) werken via de tunnel vanuit MacBook naar Mac Mini's socket
 - **Let op:** als images niet renderen op MacBook, check eerst of `~/.wacli/media/` gesynchroniseerd is — `local_path` in DB wijst naar Mac Mini paden. DB sync ≠ media sync. (date: 2026-05-17)
