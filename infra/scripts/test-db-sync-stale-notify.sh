@@ -150,6 +150,7 @@ printf '%s\n%s\n' "$DUMMY_PID" "$(( $(date +%s) - 400 ))" > "$LOCK_FILE"
 MAX_RUN_SECONDS=300 LOCK="$LOCK_FILE" NOTIFY="$NOTIFY_STUB" \
     NOTIFY_LOG="$NOTIFY_LOG" REMOTE="dbsync-test-unreachable.invalid" \
     LOG_FILE="$WORK/wacli-sync.log" \
+    OK_STAMP="$WORK/last-ok" ALERT_STAMP="$WORK/last-alert" \
     bash "$DBSYNC" >"$WORK/stdout.log" 2>&1
 
 grep -q "vorige run (pid $DUMMY_PID) hangt al" "$WORK/stdout.log" \
