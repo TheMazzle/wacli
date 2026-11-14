@@ -13,6 +13,7 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeWA struct {
@@ -237,6 +238,27 @@ func (f *fakeWA) Upload(ctx context.Context, data []byte, mediaType whatsmeow.Me
 
 func (f *fakeWA) DecryptReaction(ctx context.Context, reaction *events.Message) (*waProto.ReactionMessage, error) {
 	return nil, fmt.Errorf("not supported")
+}
+
+// fakePollVote is wat DecryptPollVote in tests teruggeeft (nil = fout).
+var fakePollVote *waProto.PollVoteMessage
+
+func (f *fakeWA) DecryptPollVote(ctx context.Context, vote *events.Message) (*waProto.PollVoteMessage, error) {
+	if fakePollVote == nil {
+		return nil, fmt.Errorf("no secret")
+	}
+	return fakePollVote, nil
+}
+
+func (f *fakeWA) BuildPollCreation(question string, options []string, selectable int) (*waProto.Message, error) {
+	poll := &waProto.PollCreationMessage{
+		Name:                   &question,
+		SelectableOptionsCount: proto.Uint32(uint32(selectable)),
+	}
+	for _, o := range options {
+		poll.Options = append(poll.Options, &waProto.PollCreationMessage_Option{OptionName: proto.String(o)})
+	}
+	return &waProto.Message{PollCreationMessageV3: poll}, nil
 }
 
 func (f *fakeWA) DownloadMediaToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType, mmsType string, targetPath string) (int64, error) {

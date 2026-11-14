@@ -282,6 +282,31 @@ func (c *Client) DecryptReaction(ctx context.Context, reaction *events.Message) 
 	return cli.DecryptReaction(ctx, reaction)
 }
 
+// DecryptPollVote ontsleutelt een stem (PollUpdateMessage). Lukt alleen als
+// whatsmeow het geheim van de poll kent: dat bewaart hij zelf bij ontvangst of
+// verzending van de poll.
+func (c *Client) DecryptPollVote(ctx context.Context, vote *events.Message) (*waProto.PollVoteMessage, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+	return cli.DecryptPollVote(ctx, vote)
+}
+
+// BuildPollCreation maakt een nieuw pollbericht, inclusief het geheim dat
+// nodig is om de stemmen erop te ontsleutelen.
+func (c *Client) BuildPollCreation(question string, options []string, selectable int) (*waProto.Message, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+	return cli.BuildPollCreation(question, options, selectable), nil
+}
+
 func (c *Client) RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error) {
 	c.mu.Lock()
 	cli := c.client

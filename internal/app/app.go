@@ -49,6 +49,8 @@ type WAClient interface {
 	DownloadMediaToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType, mmsType string, targetPath string) (int64, error)
 
 	DecryptReaction(ctx context.Context, reaction *events.Message) (*waProto.ReactionMessage, error)
+	DecryptPollVote(ctx context.Context, vote *events.Message) (*waProto.PollVoteMessage, error)
+	BuildPollCreation(question string, options []string, selectable int) (*waProto.Message, error)
 	RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error)
 	MarkRead(ctx context.Context, ids []types.MessageID, timestamp time.Time, chat types.JID, sender types.JID) error
 	ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID

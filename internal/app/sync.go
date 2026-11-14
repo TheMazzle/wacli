@@ -122,6 +122,18 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 					}
 				}
 			}
+			if pm.PollVoteFor != "" && v.Message != nil {
+				if vote, err := a.wa.DecryptPollVote(ctx, v); err == nil {
+					pm.Votes = []wa.PollVote{{
+						VoterJID:     v.Info.Sender.String(),
+						FromMe:       v.Info.IsFromMe,
+						OptionHashes: vote.GetSelectedOptions(),
+						Timestamp:    v.Info.Timestamp,
+					}}
+				} else {
+					fmt.Fprintf(os.Stderr, "\n[poll] vote on %s in %s not decrypted: %v\n", pm.PollVoteFor, v.Info.Chat, err)
+				}
+			}
 			if err := a.storeParsedMessage(ctx, pm); err == nil {
 				messagesStored.Add(1)
 			}
@@ -321,6 +333,13 @@ func chatKind(chat types.JID) string {
 func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error {
 	chatJID := pm.Chat.ToNonAD().String()
 
+	// Een stem is geen bericht: zonder deze uitzondering werd elke stem een
+	// lege '(message)'-rij. Alleen de (ontsleutelde) stem zelf bewaren.
+	if pm.PollVoteFor != "" {
+		a.storePollVotes(ctx, chatJID, pm.PollVoteFor, pm.Votes)
+		return nil
+	}
+
 	// Groepen (en broadcast-lijsten) lossen hun naam op uit dezelfde gecachete
 	// groepsinfo die verderop ook voor de metadata-write wordt hergebruikt.
 	// a.wa.ResolveChatName deed voor groepen zelf een ongecachete
@@ -439,7 +458,7 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 
 	displayText := a.buildDisplayText(ctx, pm)
 
-	return a.db.UpsertMessage(store.UpsertMessageParams{
+	err := a.db.UpsertMessage(store.UpsertMessageParams{
 		ChatJID:         chatJID,
 		ChatName:        chatName,
 		MsgID:           pm.ID,
@@ -467,6 +486,41 @@ func (a *App) storeParsedMessage(ctx context.Context, pm wa.ParsedMessage) error
 		IsForwarded:     pm.IsForwarded,
 		ForwardingScore: pm.ForwardingScore,
 	})
+	if err != nil {
+		return err
+	}
+	if pm.Poll != nil {
+		if err := a.db.UpsertPoll(chatJID, pm.ID, pm.Poll.Question, pm.Poll.Options, pm.Poll.SelectableCount); err != nil {
+			fmt.Fprintf(os.Stderr, "[poll] store poll %s: %v\n", pm.ID, err)
+		}
+		a.storePollVotes(ctx, chatJID, pm.ID, pm.Votes)
+	}
+	return nil
+}
+
+// storePollVotes legt stemmen vast onder de chat waarin de poll staat. Een
+// stem kan onder de LID van een chat binnenkomen terwijl de poll onder het
+// telefoonnummer staat (of andersom); de poll is leidend.
+func (a *App) storePollVotes(ctx context.Context, chatJID, pollMsgID string, votes []wa.PollVote) {
+	if len(votes) == 0 || pollMsgID == "" {
+		return
+	}
+	if p, err := a.db.FindPoll(pollMsgID); err == nil {
+		chatJID = p.ChatJID
+	}
+	for _, v := range votes {
+		voter := "me"
+		if !v.FromMe {
+			jid, err := types.ParseJID(v.VoterJID)
+			if err != nil {
+				continue
+			}
+			voter = a.wa.ResolveLIDToPN(ctx, jid.ToNonAD()).String()
+		}
+		if err := a.db.RecordPollVote(chatJID, pollMsgID, voter, v.OptionHashes, v.Timestamp.Unix()); err != nil {
+			fmt.Fprintf(os.Stderr, "[poll] store vote on %s: %v\n", pollMsgID, err)
+		}
+	}
 }
 
 func (a *App) buildDisplayText(ctx context.Context, pm wa.ParsedMessage) string {

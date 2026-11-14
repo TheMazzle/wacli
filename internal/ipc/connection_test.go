@@ -14,11 +14,16 @@ type fakeHandler struct {
 	qr             PairingQRResult
 	startPairCalls int
 	startPairErr   error
+	polls          []string
 }
 
 func (f *fakeHandler) SendText(string, string, string) (string, error) { return "", nil }
 func (f *fakeHandler) SendReaction(string, string, string, bool) error { return nil }
 func (f *fakeHandler) ForwardText(string, string) (string, error)      { return "", nil }
+func (f *fakeHandler) SendPoll(to, q string, opts []string, sel int) (string, error) {
+	f.polls = append(f.polls, q)
+	return "POLL1", nil
+}
 func (f *fakeHandler) MarkRead(string) error                           { return nil }
 func (f *fakeHandler) RequestBackfill(string, int64, int) error        { return nil }
 func (f *fakeHandler) DownloadMedia(string, string) error              { return nil }
@@ -160,5 +165,45 @@ func TestPairingQREmptyWhenSyncing(t *testing.T) {
 	}
 	if got.State != StateSyncing {
 		t.Errorf("State = %q, want %q", got.State, StateSyncing)
+	}
+}
+
+func TestSendPollOverIPC(t *testing.T) {
+	h := &fakeHandler{}
+	c := newTestServer(t, h)
+
+	resp, err := c.send(Request{Command: "send_poll", To: "g@g.us", PollQuestion: "Etentje?", PollOptions: []string{"Vr", "Za"}, PollSelectable: 1})
+	if err != nil || !resp.Success {
+		t.Fatalf("send_poll: resp=%+v err=%v", resp, err)
+	}
+	if len(h.polls) != 1 || h.polls[0] != "Etentje?" {
+		t.Fatalf("handler got %v", h.polls)
+	}
+
+	resp, _ = c.send(Request{Command: "send_poll", To: "g@g.us", PollQuestion: "Q", PollOptions: []string{"A", "A"}})
+	if resp.Success {
+		t.Fatal("duplicate options must be rejected")
+	}
+}
+
+func TestValidatePoll(t *testing.T) {
+	cases := []struct {
+		q    string
+		opts []string
+		sel  int
+		ok   bool
+	}{
+		{"Q", []string{"A", "B"}, 1, true},
+		{"Q", []string{"A", "B"}, 0, true},
+		{"", []string{"A", "B"}, 1, false},
+		{"Q", []string{"A"}, 1, false},
+		{"Q", []string{"A", " "}, 1, false},
+		{"Q", []string{"A", "B"}, 3, false},
+		{"Q", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}, 1, false},
+	}
+	for _, c := range cases {
+		if err := ValidatePoll(c.q, c.opts, c.sel); (err == nil) != c.ok {
+			t.Errorf("ValidatePoll(%q, %v, %d) err=%v, want ok=%v", c.q, c.opts, c.sel, err, c.ok)
+		}
 	}
 }

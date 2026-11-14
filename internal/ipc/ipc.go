@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,7 +21,7 @@ const (
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "ping", "connection_status", "start_pairing", "pairing_qr"
+	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "send_poll", "ping", "connection_status", "start_pairing", "pairing_qr"
 	To           string `json:"to,omitempty"`
 	Message      string `json:"message,omitempty"`
 	File         string `json:"file,omitempty"`
@@ -33,6 +34,43 @@ type Request struct {
 	Emoji        string `json:"emoji,omitempty"`           // for send_reaction: the emoji to react with (empty = remove)
 	FromMe       bool   `json:"from_me,omitempty"`         // for send_reaction: whether the target message is from the sender
 	ForwardText  string `json:"forward_text,omitempty"`    // for forward_message: text content to forward
+
+	// for send_poll: een nieuwe poll. WhatsApp staat doorsturen van polls niet
+	// toe, dus "doorsturen" is een nieuwe poll met dezelfde vraag en opties.
+	PollQuestion   string   `json:"poll_question,omitempty"`
+	PollOptions    []string `json:"poll_options,omitempty"`
+	PollSelectable int      `json:"poll_selectable,omitempty"` // 1 = enkele keuze, 0 = onbeperkt
+}
+
+// Grenzen die WhatsApp zelf aan een poll stelt.
+const (
+	PollMinOptions = 2
+	PollMaxOptions = 12
+)
+
+// ValidatePoll controleert een poll vóór verzending. Dubbele opties mogen niet:
+// stemmen verwijzen naar de hash van de optienaam en zouden dan samenvallen.
+func ValidatePoll(question string, options []string, selectable int) error {
+	if strings.TrimSpace(question) == "" {
+		return fmt.Errorf("poll_question is required")
+	}
+	if len(options) < PollMinOptions || len(options) > PollMaxOptions {
+		return fmt.Errorf("a poll needs %d to %d options, got %d", PollMinOptions, PollMaxOptions, len(options))
+	}
+	seen := make(map[string]bool, len(options))
+	for _, o := range options {
+		if strings.TrimSpace(o) == "" {
+			return fmt.Errorf("poll options must not be empty")
+		}
+		if seen[o] {
+			return fmt.Errorf("duplicate poll option %q", o)
+		}
+		seen[o] = true
+	}
+	if selectable < 0 || selectable > len(options) {
+		return fmt.Errorf("poll_selectable must be between 0 and %d", len(options))
+	}
+	return nil
 }
 
 // Response represents the result from the sync daemon.
@@ -82,6 +120,7 @@ type Handler interface {
 	SendText(to, message, replyToMsgID string) (msgID string, err error)
 	SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error
 	ForwardText(to, text string) (msgID string, err error)
+	SendPoll(to, question string, options []string, selectable int) (msgID string, err error)
 	MarkRead(chatJID string) error
 	RequestBackfill(chatJID string, beforeTS int64, count int) error
 	DownloadMedia(chatJID, msgID string) error
@@ -243,6 +282,19 @@ func (s *Server) processRequest(req Request) Response {
 			return Response{Success: false, Error: "to and forward_text are required"}
 		}
 		msgID, err := s.handler.ForwardText(req.To, req.ForwardText)
+		if err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
+	case "send_poll":
+		if req.To == "" {
+			return Response{Success: false, Error: "to is required"}
+		}
+		if err := ValidatePoll(req.PollQuestion, req.PollOptions, req.PollSelectable); err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		msgID, err := s.handler.SendPoll(req.To, req.PollQuestion, req.PollOptions, req.PollSelectable)
 		if err != nil {
 			return Response{Success: false, Error: err.Error()}
 		}

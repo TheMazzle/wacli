@@ -191,6 +191,57 @@ func (h *syncHandler) ForwardText(to, text string) (string, error) {
 	return string(msgID), nil
 }
 
+// SendPoll verstuurt een nieuwe poll. Dit is ook hoe Whatslack een poll
+// "doorstuurt": WhatsApp blokkeert doorsturen van polls, dus elke ontvanger
+// krijgt een eigen poll met eigen stemmen.
+func (h *syncHandler) SendPoll(to, question string, options []string, selectable int) (string, error) {
+	if h.app == nil {
+		return "", fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return "", fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return "", fmt.Errorf("whatsapp not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	toJID, err := wa.ParseUserOrJID(to)
+	if err != nil {
+		return "", fmt.Errorf("parse recipient: %w", err)
+	}
+	msg, err := h.app.WA().BuildPollCreation(question, options, selectable)
+	if err != nil {
+		return "", fmt.Errorf("build poll: %w", err)
+	}
+	msgID, err := h.app.WA().SendProtoMessage(ctx, toJID, msg)
+	if err != nil {
+		return "", fmt.Errorf("send poll: %w", err)
+	}
+
+	now := time.Now().UTC()
+	chatName := h.app.WA().ResolveChatName(ctx, toJID, "")
+	_ = h.app.DB().UpsertChat(toJID.String(), chatKindFromJID(toJID), chatName, now)
+	_ = h.app.DB().UpsertMessage(store.UpsertMessageParams{
+		ChatJID:     toJID.String(),
+		ChatName:    chatName,
+		MsgID:       string(msgID),
+		SenderName:  "me",
+		Timestamp:   now,
+		FromMe:      true,
+		Text:        question,
+		DisplayText: question,
+		IsLive:      true,
+		EventType:   "poll",
+	})
+	if err := h.app.DB().UpsertPoll(toJID.String(), string(msgID), question, options, uint32(selectable)); err != nil {
+		fmt.Fprintf(os.Stderr, "[poll] store sent poll %s: %v\n", msgID, err)
+	}
+	return string(msgID), nil
+}
+
 func (h *syncHandler) MarkRead(chatJID string) error {
 	if h.app == nil {
 		return fmt.Errorf("app not initialized")

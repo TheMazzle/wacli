@@ -195,6 +195,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensurePollTables(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -39,6 +39,34 @@ type ParsedMessage struct {
 	EventType       string // "message" (default), "system"
 	IsForwarded     bool
 	ForwardingScore uint32
+
+	// Poll is gevuld als dit bericht een poll aanmaakt.
+	Poll *Poll
+	// PollVoteFor is het ID van de poll waar dit bericht een stem op is
+	// (PollUpdateMessage). Zo'n bericht krijgt geen eigen rij in messages;
+	// de stem zelf staat in Votes zodra hij ontsleuteld is.
+	PollVoteFor string
+	// Votes zijn ontsleutelde stemmen op de poll in dit bericht (history sync
+	// levert ze mee bij de poll) of op PollVoteFor (live stem).
+	Votes []PollVote
+}
+
+// Poll is de inhoud van een poll: vraag, opties en hoeveel opties een
+// deelnemer mag kiezen (1 = enkele keuze, 0 of meer dan 1 = meerdere).
+type Poll struct {
+	Question        string
+	Options         []string
+	SelectableCount uint32
+}
+
+// PollVote is de actuele keuze van één deelnemer. Een nieuwe stem vervangt de
+// vorige; een lege OptionHashes betekent dat de stem is ingetrokken.
+// OptionHashes zijn SHA-256-hashes van de optienamen, zoals WhatsApp ze stuurt.
+type PollVote struct {
+	VoterJID     string
+	FromMe       bool
+	OptionHashes [][]byte
+	Timestamp    time.Time
 }
 
 func ParseLiveMessage(evt *events.Message) ParsedMessage {
@@ -87,7 +115,55 @@ func ParseHistoryMessage(chatJID string, hist *waProto.WebMessageInfo, msgOrderI
 	if hist.GetMessage() != nil {
 		extractWAProto(hist.GetMessage(), &pm)
 	}
+	if pm.Poll != nil {
+		pm.Votes = historyPollVotes(hist)
+	}
 	return pm
+}
+
+// historyPollVotes haalt de stemmen op die history sync al ontsleuteld bij een
+// poll meelevert. De kiezer staat in de sleutel van het stembericht.
+func historyPollVotes(hist *waProto.WebMessageInfo) []PollVote {
+	var out []PollVote
+	for _, u := range hist.GetPollUpdates() {
+		key := u.GetPollUpdateMessageKey()
+		if key == nil || u.GetVote() == nil {
+			continue
+		}
+		v := PollVote{
+			FromMe:       key.GetFromMe(),
+			OptionHashes: u.GetVote().GetSelectedOptions(),
+			Timestamp:    time.UnixMilli(u.GetSenderTimestampMS()).UTC(),
+		}
+		if !v.FromMe {
+			v.VoterJID = strings.TrimSpace(key.GetParticipant())
+			if v.VoterJID == "" {
+				v.VoterJID = strings.TrimSpace(key.GetRemoteJID())
+			}
+			if v.VoterJID == "" {
+				continue
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// pollCreation geeft de poll in m, ongeacht welke van de protoversies
+// WhatsApp gebruikt (V1 enkele keuze, V2/V3 en later zijn varianten).
+func pollCreation(m *waProto.Message) *waProto.PollCreationMessage {
+	for _, p := range []*waProto.PollCreationMessage{
+		m.GetPollCreationMessage(),
+		m.GetPollCreationMessageV2(),
+		m.GetPollCreationMessageV3(),
+		m.GetPollCreationMessageV5(),
+		m.GetPollCreationMessageV6(),
+	} {
+		if p != nil {
+			return p
+		}
+	}
+	return nil
 }
 
 func extractWAProto(m *waProto.Message, pm *ParsedMessage) {
@@ -111,6 +187,27 @@ func extractWAProto(m *waProto.Message, pm *ParsedMessage) {
 		pm.Text = m.GetConversation()
 	case m.GetExtendedTextMessage() != nil:
 		pm.Text = m.GetExtendedTextMessage().GetText()
+	}
+
+	if poll := pollCreation(m); poll != nil {
+		p := &Poll{
+			Question:        strings.TrimSpace(poll.GetName()),
+			SelectableCount: poll.GetSelectableOptionsCount(),
+		}
+		for _, o := range poll.GetOptions() {
+			p.Options = append(p.Options, o.GetOptionName())
+		}
+		pm.Poll = p
+		pm.EventType = "poll"
+		if pm.Text == "" {
+			pm.Text = p.Question
+		}
+	}
+
+	if upd := m.GetPollUpdateMessage(); upd != nil {
+		if key := upd.GetPollCreationMessageKey(); key != nil {
+			pm.PollVoteFor = key.GetID()
+		}
 	}
 
 	if img := m.GetImageMessage(); img != nil {
@@ -279,6 +376,9 @@ func contextInfoForMessage(m *waProto.Message) *waProto.ContextInfo {
 	if contacts := m.GetContactsArrayMessage(); contacts != nil {
 		return contacts.GetContextInfo()
 	}
+	if poll := pollCreation(m); poll != nil {
+		return poll.GetContextInfo()
+	}
 	return nil
 }
 
@@ -313,6 +413,9 @@ func displayTextForProto(m *waProto.Message) string {
 	}
 	if contacts := m.GetContactsArrayMessage(); contacts != nil {
 		return "Sent contacts"
+	}
+	if poll := pollCreation(m); poll != nil {
+		return "Poll: " + strings.TrimSpace(poll.GetName())
 	}
 
 	if text := strings.TrimSpace(m.GetConversation()); text != "" {
