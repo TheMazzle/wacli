@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"encoding/base64"
 	"os"
 	"sync"
 	"testing"
@@ -15,18 +16,28 @@ type fakeHandler struct {
 	startPairCalls int
 	startPairErr   error
 	polls          []string
+	uploaded       []byte
 }
 
 func (f *fakeHandler) SendText(string, string, string) (string, error) { return "", nil }
 func (f *fakeHandler) SendReaction(string, string, string, bool) error { return nil }
 func (f *fakeHandler) ForwardText(string, string) (string, error)      { return "", nil }
+func (f *fakeHandler) UploadMedia(data []byte, name, mime string) (string, string, error) {
+	f.uploaded = data
+	return "TOKEN", "image", nil
+}
+func (f *fakeHandler) SendMedia(to, token, caption string) (string, error) { return "M1", nil }
+func (f *fakeHandler) SendLocation(to string, lat, lon float64, name, addr string) (string, error) {
+	return "L1", nil
+}
+func (f *fakeHandler) SendContact(to, jid, name string) (string, error) { return "C1", nil }
 func (f *fakeHandler) SendPoll(to, q string, opts []string, sel int) (string, error) {
 	f.polls = append(f.polls, q)
 	return "POLL1", nil
 }
-func (f *fakeHandler) MarkRead(string) error                           { return nil }
-func (f *fakeHandler) RequestBackfill(string, int64, int) error        { return nil }
-func (f *fakeHandler) DownloadMedia(string, string) error              { return nil }
+func (f *fakeHandler) MarkRead(string) error                    { return nil }
+func (f *fakeHandler) RequestBackfill(string, int64, int) error { return nil }
+func (f *fakeHandler) DownloadMedia(string, string) error       { return nil }
 
 func (f *fakeHandler) ConnectionStatus() ConnectionStatusResult {
 	f.mu.Lock()
@@ -205,5 +216,31 @@ func TestValidatePoll(t *testing.T) {
 		if err := ValidatePoll(c.q, c.opts, c.sel); (err == nil) != c.ok {
 			t.Errorf("ValidatePoll(%q, %v, %d) err=%v, want ok=%v", c.q, c.opts, c.sel, err, c.ok)
 		}
+	}
+}
+
+func TestUploadMediaOverIPC(t *testing.T) {
+	h := &fakeHandler{}
+	c := newTestServer(t, h)
+
+	// 2 MB: ruim boven een standaard buffer, het hele bestand moet aankomen.
+	data := make([]byte, 2<<20)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	resp, err := c.send(Request{Command: "upload_media", MediaData: base64.StdEncoding.EncodeToString(data), Filename: "a.jpg"})
+	if err != nil || !resp.Success {
+		t.Fatalf("upload_media: %+v %v", resp, err)
+	}
+	if len(h.uploaded) != len(data) || h.uploaded[len(data)-1] != data[len(data)-1] {
+		t.Fatalf("handler got %d bytes", len(h.uploaded))
+	}
+	resp, _ = c.send(Request{Command: "upload_media", MediaData: "not base64!"})
+	if resp.Success {
+		t.Fatal("invalid base64 must be rejected")
+	}
+	resp, _ = c.send(Request{Command: "send_media", To: "g@g.us"})
+	if resp.Success {
+		t.Fatal("send_media without token must be rejected")
 	}
 }

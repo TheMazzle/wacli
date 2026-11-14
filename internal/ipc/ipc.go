@@ -3,6 +3,7 @@ package ipc
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -14,14 +15,16 @@ import (
 )
 
 const (
-	socketName   = "wacli.sock"
-	readTimeout  = 30 * time.Second
+	socketName = "wacli.sock"
+	// Ruim: upload_media is één regel met een heel bestand erin, en via de
+	// tunnel vanaf de MacBook gaat dat niet in een paar seconden.
+	readTimeout  = 5 * time.Minute
 	writeTimeout = 30 * time.Second
 )
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "send_poll", "ping", "connection_status", "start_pairing", "pairing_qr"
+	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "send_poll", "upload_media", "send_media", "send_location", "send_contact", "ping", "connection_status", "start_pairing", "pairing_qr"
 	To           string `json:"to,omitempty"`
 	Message      string `json:"message,omitempty"`
 	File         string `json:"file,omitempty"`
@@ -40,6 +43,30 @@ type Request struct {
 	PollQuestion   string   `json:"poll_question,omitempty"`
 	PollOptions    []string `json:"poll_options,omitempty"`
 	PollSelectable int      `json:"poll_selectable,omitempty"` // 1 = enkele keuze, 0 = onbeperkt
+
+	// upload_media: het bestand zelf, base64. De daemon draait op een andere
+	// machine dan Whatslack (MacBook via tunnel), dus een pad werkt niet.
+	MediaData string `json:"media_data,omitempty"`
+	Filename  string `json:"filename,omitempty"`
+	MimeType  string `json:"mime_type,omitempty"`
+	// send_media: token uit upload_media; Caption is het bijschrift.
+	UploadToken string `json:"upload_token,omitempty"`
+
+	// send_location
+	Latitude        float64 `json:"latitude,omitempty"`
+	Longitude       float64 `json:"longitude,omitempty"`
+	LocationName    string  `json:"location_name,omitempty"`
+	LocationAddress string  `json:"location_address,omitempty"`
+
+	// send_contact: de te delen persoon en optioneel de naam op de kaart.
+	ContactJID  string `json:"contact_jid,omitempty"`
+	ContactName string `json:"contact_name,omitempty"`
+}
+
+// UploadMediaResult is het antwoord op upload_media.
+type UploadMediaResult struct {
+	UploadToken string `json:"upload_token"`
+	MediaType   string `json:"media_type"`
 }
 
 // Grenzen die WhatsApp zelf aan een poll stelt.
@@ -121,6 +148,10 @@ type Handler interface {
 	SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error
 	ForwardText(to, text string) (msgID string, err error)
 	SendPoll(to, question string, options []string, selectable int) (msgID string, err error)
+	UploadMedia(data []byte, filename, mimeType string) (token, mediaType string, err error)
+	SendMedia(to, token, caption string) (msgID string, err error)
+	SendLocation(to string, lat, lon float64, name, address string) (msgID string, err error)
+	SendContact(to, contactJID, displayName string) (msgID string, err error)
 	MarkRead(chatJID string) error
 	RequestBackfill(chatJID string, beforeTS int64, count int) error
 	DownloadMedia(chatJID, msgID string) error
@@ -295,6 +326,47 @@ func (s *Server) processRequest(req Request) Response {
 			return Response{Success: false, Error: err.Error()}
 		}
 		msgID, err := s.handler.SendPoll(req.To, req.PollQuestion, req.PollOptions, req.PollSelectable)
+		if err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
+	case "upload_media":
+		data, err := base64.StdEncoding.DecodeString(req.MediaData)
+		if err != nil || len(data) == 0 {
+			return Response{Success: false, Error: "media_data must be non-empty base64"}
+		}
+		token, mediaType, err := s.handler.UploadMedia(data, req.Filename, req.MimeType)
+		if err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: UploadMediaResult{UploadToken: token, MediaType: mediaType}}
+
+	case "send_media":
+		if req.To == "" || req.UploadToken == "" {
+			return Response{Success: false, Error: "to and upload_token are required"}
+		}
+		msgID, err := s.handler.SendMedia(req.To, req.UploadToken, req.Caption)
+		if err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
+	case "send_location":
+		if req.To == "" {
+			return Response{Success: false, Error: "to is required"}
+		}
+		msgID, err := s.handler.SendLocation(req.To, req.Latitude, req.Longitude, req.LocationName, req.LocationAddress)
+		if err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
+	case "send_contact":
+		if req.To == "" || req.ContactJID == "" {
+			return Response{Success: false, Error: "to and contact_jid are required"}
+		}
+		msgID, err := s.handler.SendContact(req.To, req.ContactJID, req.ContactName)
 		if err != nil {
 			return Response{Success: false, Error: err.Error()}
 		}

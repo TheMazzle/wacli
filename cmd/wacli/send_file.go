@@ -12,28 +12,33 @@ import (
 	"github.com/steipete/wacli/internal/app"
 	"github.com/steipete/wacli/internal/store"
 	"github.com/steipete/wacli/internal/wa"
+	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
 
-func sendFile(ctx context.Context, a interface {
+type mediaSender interface {
 	WA() app.WAClient
 	DB() *store.DB
-}, to types.JID, filePath, filename, caption, mimeOverride string) (string, map[string]string, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", nil, err
-	}
+}
 
-	name := strings.TrimSpace(filename)
-	if name == "" {
-		name = filepath.Base(filePath)
-	}
-	mimeType := strings.TrimSpace(mimeOverride)
+// preparedMedia is een naar WhatsApp geüpload bestand dat nog verstuurd moet
+// worden. Eén upload kan naar meerdere chats: de mediasleutel mag hergebruikt
+// worden, zo gaan de bytes maar één keer over de lijn.
+type preparedMedia struct {
+	MediaType string // image, video, audio, document
+	MimeType  string
+	Name      string
+	Up        whatsmeow.UploadResponse
+}
+
+// detectMedia bepaalt mime- en WhatsApp-mediatype. extPath geeft de extensie
+// (een bestandspad of de bestandsnaam); mimeOverride wint als die gezet is.
+func detectMedia(data []byte, extPath, mimeOverride string) (mimeType, mediaType string) {
+	mimeType = strings.TrimSpace(mimeOverride)
 	if mimeType == "" {
-		// Use filePath for MIME detection, not the display name override
-		mimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(filePath)))
+		mimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(extPath)))
 	}
 	if mimeType == "" {
 		sniff := data
@@ -42,30 +47,33 @@ func sendFile(ctx context.Context, a interface {
 		}
 		mimeType = http.DetectContentType(sniff)
 	}
-
-	mediaType := "document"
-	uploadType, _ := wa.MediaTypeFromString("document")
+	mediaType = "document"
 	switch {
-	case strings.HasPrefix(mimeType, "image/"):
+	// GIF en SVG zijn voor WhatsApp geen foto: als document komen ze heel aan.
+	case strings.HasPrefix(mimeType, "image/") && mimeType != "image/gif" && mimeType != "image/svg+xml":
 		mediaType = "image"
-		uploadType, _ = wa.MediaTypeFromString("image")
 	case strings.HasPrefix(mimeType, "video/"):
 		mediaType = "video"
-		uploadType, _ = wa.MediaTypeFromString("video")
 	case strings.HasPrefix(mimeType, "audio/"):
 		mediaType = "audio"
-		uploadType, _ = wa.MediaTypeFromString("audio")
 	}
+	return mimeType, mediaType
+}
 
+func uploadMedia(ctx context.Context, a mediaSender, data []byte, extPath, name, mimeOverride string) (preparedMedia, error) {
+	mimeType, mediaType := detectMedia(data, extPath, mimeOverride)
+	uploadType, _ := wa.MediaTypeFromString(mediaType)
 	up, err := a.WA().Upload(ctx, data, uploadType)
 	if err != nil {
-		return "", nil, err
+		return preparedMedia{}, err
 	}
+	return preparedMedia{MediaType: mediaType, MimeType: mimeType, Name: name, Up: up}, nil
+}
 
-	now := time.Now().UTC()
+func mediaMessage(pm preparedMedia, caption string) *waProto.Message {
+	up := pm.Up
 	msg := &waProto.Message{}
-
-	switch mediaType {
+	switch pm.MediaType {
 	case "image":
 		msg.ImageMessage = &waProto.ImageMessage{
 			URL:           proto.String(up.URL),
@@ -74,7 +82,7 @@ func sendFile(ctx context.Context, a interface {
 			FileEncSHA256: up.FileEncSHA256,
 			FileSHA256:    up.FileSHA256,
 			FileLength:    proto.Uint64(up.FileLength),
-			Mimetype:      proto.String(mimeType),
+			Mimetype:      proto.String(pm.MimeType),
 			Caption:       proto.String(caption),
 		}
 	case "video":
@@ -85,7 +93,7 @@ func sendFile(ctx context.Context, a interface {
 			FileEncSHA256: up.FileEncSHA256,
 			FileSHA256:    up.FileSHA256,
 			FileLength:    proto.Uint64(up.FileLength),
-			Mimetype:      proto.String(mimeType),
+			Mimetype:      proto.String(pm.MimeType),
 			Caption:       proto.String(caption),
 		}
 	case "audio":
@@ -96,7 +104,7 @@ func sendFile(ctx context.Context, a interface {
 			FileEncSHA256: up.FileEncSHA256,
 			FileSHA256:    up.FileSHA256,
 			FileLength:    proto.Uint64(up.FileLength),
-			Mimetype:      proto.String(mimeType),
+			Mimetype:      proto.String(pm.MimeType),
 			PTT:           proto.Bool(false),
 		}
 	default:
@@ -107,45 +115,73 @@ func sendFile(ctx context.Context, a interface {
 			FileEncSHA256: up.FileEncSHA256,
 			FileSHA256:    up.FileSHA256,
 			FileLength:    proto.Uint64(up.FileLength),
-			Mimetype:      proto.String(mimeType),
-			FileName:      proto.String(name),
+			Mimetype:      proto.String(pm.MimeType),
+			FileName:      proto.String(pm.Name),
 			Caption:       proto.String(caption),
-			Title:         proto.String(name),
+			Title:         proto.String(pm.Name),
 		}
 	}
+	return msg
+}
 
-	id, err := a.WA().SendProtoMessage(ctx, to, msg)
-	if err != nil {
-		return "", nil, err
+// sendPrepared verstuurt een geüpload bestand naar één chat en legt het vast.
+// Audio heeft in WhatsApp geen bijschrift; dat valt dan weg.
+func sendPrepared(ctx context.Context, a mediaSender, to types.JID, pm preparedMedia, caption string) (string, error) {
+	if pm.MediaType == "audio" {
+		caption = ""
 	}
-
+	id, err := a.WA().SendProtoMessage(ctx, to, mediaMessage(pm, caption))
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	up := pm.Up
 	chatName := a.WA().ResolveChatName(ctx, to, "")
-	kind := chatKindFromJID(to)
-	_ = a.DB().UpsertChat(to.String(), kind, chatName, now)
+	_ = a.DB().UpsertChat(to.String(), chatKindFromJID(to), chatName, now)
 	_ = a.DB().UpsertMessage(store.UpsertMessageParams{
 		ChatJID:       to.String(),
 		ChatName:      chatName,
-		MsgID:         id,
-		SenderJID:     "",
+		MsgID:         string(id),
 		SenderName:    "me",
 		Timestamp:     now,
 		FromMe:        true,
 		Text:          caption,
-		MediaType:     mediaType,
+		MediaType:     pm.MediaType,
 		MediaCaption:  caption,
-		Filename:      name,
-		MimeType:      mimeType,
+		Filename:      pm.Name,
+		MimeType:      pm.MimeType,
 		DirectPath:    up.DirectPath,
 		MediaKey:      up.MediaKey,
 		FileSHA256:    up.FileSHA256,
 		FileEncSHA256: up.FileEncSHA256,
 		FileLength:    up.FileLength,
+		IsLive:        true,
 	})
+	return string(id), nil
+}
 
+func sendFile(ctx context.Context, a mediaSender, to types.JID, filePath, filename, caption, mimeOverride string) (string, map[string]string, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", nil, err
+	}
+	name := strings.TrimSpace(filename)
+	if name == "" {
+		name = filepath.Base(filePath)
+	}
+	// Mime op basis van het pad, niet van een afwijkende weergavenaam.
+	pm, err := uploadMedia(ctx, a, data, filePath, name, mimeOverride)
+	if err != nil {
+		return "", nil, err
+	}
+	id, err := sendPrepared(ctx, a, to, pm, caption)
+	if err != nil {
+		return "", nil, err
+	}
 	return id, map[string]string{
 		"name":      name,
-		"mime_type": mimeType,
-		"media":     mediaType,
+		"mime_type": pm.MimeType,
+		"media":     pm.MediaType,
 	}, nil
 }
 
