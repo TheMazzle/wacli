@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -240,6 +241,9 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	// vóór de refresh-blokken: de pas leest alleen lokale tabellen en mag niet
 	// achter een netwerkgebonden avatarronde van honderden foto's wachten.
 	a.repairChatNames(ctx)
+
+	// LID-koppelingen naar wacli.db, zodat Whatslack op de MacBook ze kent.
+	go a.keepLIDMapCopied(ctx)
 
 	// Optional: bootstrap imports (helps contacts/groups management without waiting for events).
 	if opts.RefreshContacts {
@@ -822,5 +826,26 @@ func (a *App) storeGroupInfoEvent(ctx context.Context, evt *events.GroupInfo) {
 			EventType:   "system",
 			IsLive:      true,
 		})
+	}
+}
+
+// keepLIDMapCopied kopieert de LID-koppelingen nu en daarna elke 10 minuten.
+func (a *App) keepLIDMapCopied(ctx context.Context) {
+	sessionPath := filepath.Join(a.opts.StoreDir, "session.db")
+	copyOnce := func() {
+		if _, err := a.db.CopyLIDMap(ctx, sessionPath); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "[lid-map] copy failed: %v\n", err)
+		}
+	}
+	copyOnce()
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			copyOnce()
+		}
 	}
 }

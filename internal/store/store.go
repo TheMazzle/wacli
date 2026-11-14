@@ -199,6 +199,10 @@ func (d *DB) ensureSchema() error {
 		return err
 	}
 
+	if err := d.ensureLIDMapTable(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
