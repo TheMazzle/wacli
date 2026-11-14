@@ -7,6 +7,7 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type Media struct {
@@ -427,4 +428,24 @@ func displayTextForProto(m *waProto.Message) string {
 		}
 	}
 	return ""
+}
+
+// PopulatedFields noemt de gevulde velden van een bericht, voor diagnose van
+// berichttypes die wacli nog niet kent (anders worden het lege rijen).
+func PopulatedFields(m *waProto.Message) []string {
+	if m == nil {
+		return nil
+	}
+	var out []string
+	m.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+		out = append(out, string(fd.Name()))
+		return true
+	})
+	return out
+}
+
+// IsEmpty meldt of er na het parsen niets bruikbaars in het bericht zat.
+func (pm ParsedMessage) IsEmpty() bool {
+	return strings.TrimSpace(pm.Text) == "" && pm.Media == nil && pm.ReactionToID == "" &&
+		pm.Poll == nil && pm.PollVoteFor == "" && (pm.EventType == "" || pm.EventType == "message")
 }

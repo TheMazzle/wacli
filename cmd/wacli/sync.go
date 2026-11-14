@@ -48,7 +48,7 @@ func (h *syncHandler) SendText(to, message, replyToMsgID string) (string, error)
 
 	var msgID types.MessageID
 	if replyToMsgID != "" {
-		msgID, err = h.app.WA().SendReply(ctx, toJID, message, replyToMsgID)
+		msgID, err = h.app.WA().SendReply(ctx, toJID, message, h.quotedMessage(toJID, replyToMsgID))
 	} else {
 		msgID, err = h.app.WA().SendText(ctx, toJID, message)
 	}
@@ -75,6 +75,26 @@ func (h *syncHandler) SendText(to, message, replyToMsgID string) (string, error)
 	})
 
 	return string(msgID), nil
+}
+
+// quotedMessage zoekt het geciteerde bericht op, voor afzender en citaattekst.
+// Onbekend bericht: alleen het ID (WhatsApp toont het citaat dan zo goed als
+// het kan; beter dan niet versturen).
+func (h *syncHandler) quotedMessage(chat types.JID, msgID string) wa.QuotedMessage {
+	q := wa.QuotedMessage{ID: msgID}
+	m, err := h.app.DB().GetMessage(chat.String(), msgID)
+	if err != nil {
+		return q
+	}
+	q.FromMe = m.FromMe
+	if s, err := types.ParseJID(m.SenderJID); err == nil {
+		q.Sender = s
+	}
+	q.Text = m.Text
+	if q.Text == "" {
+		q.Text = m.DisplayText
+	}
+	return q
 }
 
 func (h *syncHandler) SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error {

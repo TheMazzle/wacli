@@ -220,7 +220,7 @@ func (f *fakeWA) SendText(ctx context.Context, to types.JID, text string) (types
 	return types.MessageID("msgid"), nil
 }
 
-func (f *fakeWA) SendReply(ctx context.Context, to types.JID, text, replyToMsgID string) (types.MessageID, error) {
+func (f *fakeWA) SendReply(ctx context.Context, to types.JID, text string, quoted wa.QuotedMessage) (types.MessageID, error) {
 	return types.MessageID("msgid"), nil
 }
 

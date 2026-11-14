@@ -211,21 +211,49 @@ func (c *Client) SendProtoMessage(ctx context.Context, to types.JID, msg *waProt
 	return resp.ID, nil
 }
 
-func (c *Client) SendReply(ctx context.Context, to types.JID, text, replyToMsgID string) (types.MessageID, error) {
+// QuotedMessage beschrijft het bericht waarop een antwoord citeert.
+type QuotedMessage struct {
+	ID     string
+	Sender types.JID // afzender; leeg voor eigen berichten
+	FromMe bool
+	Text   string // wat in het citaatblok staat
+}
+
+// BuildReplyContext bouwt de ContextInfo van een antwoord. Participant is de
+// afzender van het geciteerde bericht (bij een eigen bericht: wijzelf). Met de
+// groep zelf als Participant, zoals vroeger, koppelt WhatsApp het citaat in een
+// groep niet aan het juiste bericht; zonder tekst toont het een leeg citaat.
+func BuildReplyContext(own types.JID, q QuotedMessage) *waProto.ContextInfo {
+	participant := q.Sender.ToNonAD()
+	if q.FromMe || participant.IsEmpty() {
+		participant = own.ToNonAD()
+	}
+	ci := &waProto.ContextInfo{
+		StanzaID:      proto.String(q.ID),
+		QuotedMessage: &waProto.Message{Conversation: proto.String(q.Text)},
+	}
+	if !participant.IsEmpty() {
+		ci.Participant = proto.String(participant.String())
+	}
+	return ci
+}
+
+// SendReply verstuurt text als antwoord op q in chat `to`.
+func (c *Client) SendReply(ctx context.Context, to types.JID, text string, q QuotedMessage) (types.MessageID, error) {
 	c.mu.Lock()
 	cli := c.client
 	c.mu.Unlock()
 	if cli == nil || !cli.IsConnected() {
 		return "", fmt.Errorf("not connected")
 	}
+	var own types.JID
+	if cli.Store != nil && cli.Store.ID != nil {
+		own = *cli.Store.ID
+	}
 	msg := &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
-			Text: proto.String(text),
-			ContextInfo: &waProto.ContextInfo{
-				StanzaID:      proto.String(replyToMsgID),
-				Participant:   proto.String(to.String()),
-				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
-			},
+			Text:        proto.String(text),
+			ContextInfo: BuildReplyContext(own, q),
 		},
 	}
 	resp, err := c.send(ctx, cli, to, msg)

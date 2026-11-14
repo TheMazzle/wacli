@@ -122,6 +122,12 @@ func (a *App) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 					}
 				}
 			}
+			if pm.IsEmpty() && v.Message != nil {
+				// Onbekend type: zichtbaar maken wat het is (2026-11-14: bij elke
+				// pollstem kwam er zo'n leeg bericht mee).
+				fmt.Fprintf(os.Stderr, "\n[unknown-msg] chat=%s id=%s sender=%s fields=%v\n",
+					v.Info.Chat, v.Info.ID, v.Info.Sender, wa.PopulatedFields(v.Message))
+			}
 			if pm.PollVoteFor != "" && v.Message != nil {
 				if vote, err := a.wa.DecryptPollVote(ctx, v); err == nil {
 					pm.Votes = []wa.PollVote{{

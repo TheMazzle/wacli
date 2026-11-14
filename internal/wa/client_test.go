@@ -97,3 +97,21 @@ func TestBuildReactionKeyDirectChatHasNoParticipant(t *testing.T) {
 		t.Fatalf("1-op-1 hoort geen participant te hebben, kreeg %q", key.GetParticipant())
 	}
 }
+
+func TestBuildReplyContextUsesQuotedSender(t *testing.T) {
+	own, _ := types.ParseJID("31615829315:16@s.whatsapp.net")
+	sender, _ := types.ParseJID("181870423715997:3@lid")
+
+	ci := BuildReplyContext(own, QuotedMessage{ID: "Q1", Sender: sender, Text: "Lasagne x 2 bitte!"})
+	if ci.GetParticipant() != "181870423715997@lid" {
+		t.Errorf("participant = %q, want the quoted sender (not the group)", ci.GetParticipant())
+	}
+	if ci.GetStanzaID() != "Q1" || ci.GetQuotedMessage().GetConversation() != "Lasagne x 2 bitte!" {
+		t.Errorf("unexpected context %+v", ci)
+	}
+
+	mine := BuildReplyContext(own, QuotedMessage{ID: "Q2", FromMe: true, Text: "Zin an!"})
+	if mine.GetParticipant() != "31615829315@s.whatsapp.net" {
+		t.Errorf("own message: participant = %q, want own JID", mine.GetParticipant())
+	}
+}
