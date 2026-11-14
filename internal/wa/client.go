@@ -28,13 +28,14 @@ type Client struct {
 
 	mu     sync.Mutex
 	client *whatsmeow.Client
+	pacer  *sendPacer
 }
 
 func New(opts Options) (*Client, error) {
 	if strings.TrimSpace(opts.StorePath) == "" {
 		return nil, fmt.Errorf("StorePath is required")
 	}
-	c := &Client{opts: opts}
+	c := &Client{opts: opts, pacer: newSendPacer()}
 	if err := c.init(); err != nil {
 		return nil, err
 	}
@@ -169,6 +170,18 @@ func (c *Client) RemoveEventHandler(id uint32) {
 	cli.RemoveEventHandler(id)
 }
 
+// send verstuurt via de pacer, zodat berichten naar één chat nooit in
+// dezelfde seconde vertrekken (zie minSendGap).
+func (c *Client) send(ctx context.Context, cli *whatsmeow.Client, to types.JID, msg *waProto.Message) (whatsmeow.SendResponse, error) {
+	var resp whatsmeow.SendResponse
+	err := c.pacer.do(ctx, to, func() error {
+		var err error
+		resp, err = cli.SendMessage(ctx, to, msg)
+		return err
+	})
+	return resp, err
+}
+
 func (c *Client) SendText(ctx context.Context, to types.JID, text string) (types.MessageID, error) {
 	c.mu.Lock()
 	cli := c.client
@@ -177,7 +190,7 @@ func (c *Client) SendText(ctx context.Context, to types.JID, text string) (types
 		return "", fmt.Errorf("not connected")
 	}
 	msg := &waProto.Message{Conversation: &text}
-	resp, err := cli.SendMessage(ctx, to, msg)
+	resp, err := c.send(ctx, cli, to, msg)
 	if err != nil {
 		return "", err
 	}
@@ -191,7 +204,7 @@ func (c *Client) SendProtoMessage(ctx context.Context, to types.JID, msg *waProt
 	if cli == nil || !cli.IsConnected() {
 		return "", fmt.Errorf("not connected")
 	}
-	resp, err := cli.SendMessage(ctx, to, msg)
+	resp, err := c.send(ctx, cli, to, msg)
 	if err != nil {
 		return "", err
 	}
@@ -215,7 +228,7 @@ func (c *Client) SendReply(ctx context.Context, to types.JID, text, replyToMsgID
 			},
 		},
 	}
-	resp, err := cli.SendMessage(ctx, to, msg)
+	resp, err := c.send(ctx, cli, to, msg)
 	if err != nil {
 		return "", err
 	}
