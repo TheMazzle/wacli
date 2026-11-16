@@ -40,6 +40,14 @@ go get go.mau.fi/whatsmeow@latest && make -C infra build reinstall
 ```
 Reken op kleine API-patches — signatures breken tussen versies.
 
+### Diagnose: bericht ontbreekt of staat verkeerd
+- **Leeg `(message)` in wacli.db bij een recent bericht = type dat wacli niet parst**, geen history-stub.
+  Zo verdween op 2026-11-14 een poll. `grep '\[unknown-msg\]' ~/Library/Logs/Whatslack/wacli-sync.log`
+  noemt de protovelden; pas daarna concluderen wat het is (een `senderKeyDistributionMessage` bij een
+  pollstem is onschuldig sleutelverkeer, geen verloren stem).
+- **Volgorde bij ontvangers klopt niet: eerst kijken of `ts` gelijk is.** WhatsApp telt in hele seconden;
+  `sendPacer` (`internal/wa/pacer.go`) houdt ≥1,05 s tussen berichten naar één chat. Niet weghalen.
+
 ### Health & fatale states
 - `internal/app/fatal.go` bepaalt welke connectiestates fataal zijn. Fatale states
   aborten de sync-loop met `[FATAL]` regels en een non-zero exit. **Nooit een
