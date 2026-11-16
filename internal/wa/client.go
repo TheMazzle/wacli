@@ -336,6 +336,27 @@ func (c *Client) DecryptPollVote(ctx context.Context, vote *events.Message) (*wa
 	return cli.DecryptPollVote(ctx, vote)
 }
 
+// SendPollVote verstuurt een stem op een bestaande poll. pollInfo is de
+// MessageInfo van het originele poll-bericht; optionNames zijn de leesbare
+// namen van de gekozen opties (WhatsApp encrypts ze zelf).
+func (c *Client) SendPollVote(ctx context.Context, pollInfo *types.MessageInfo, optionNames []string) (types.MessageID, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return "", fmt.Errorf("not connected")
+	}
+	msg, err := cli.BuildPollVote(ctx, pollInfo, optionNames)
+	if err != nil {
+		return "", fmt.Errorf("build poll vote: %w", err)
+	}
+	resp, err := c.send(ctx, cli, pollInfo.Chat, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
 // BuildPollCreation maakt een nieuw pollbericht, inclusief het geheim dat
 // nodig is om de stemmen erop te ontsleutelen.
 func (c *Client) BuildPollCreation(question string, options []string, selectable int) (*waProto.Message, error) {

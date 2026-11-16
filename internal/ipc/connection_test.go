@@ -21,6 +21,7 @@ type fakeHandler struct {
 
 func (f *fakeHandler) SendText(string, string, string) (string, error) { return "", nil }
 func (f *fakeHandler) SendReaction(string, string, string, bool) error { return nil }
+func (f *fakeHandler) VotePoll(string, string, []string) error         { return nil }
 func (f *fakeHandler) ForwardText(string, string) (string, error)      { return "", nil }
 func (f *fakeHandler) UploadMedia(data []byte, name, mime string) (string, string, error) {
 	f.uploaded = data

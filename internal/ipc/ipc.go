@@ -24,7 +24,7 @@ const (
 
 // Request represents a command sent to the sync daemon.
 type Request struct {
-	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "send_poll", "upload_media", "send_media", "send_location", "send_contact", "ping", "connection_status", "start_pairing", "pairing_qr"
+	Command      string `json:"command"` // "send_text", "send_file", "send_reaction", "mark_read", "backfill", "media_download", "forward_message", "send_poll", "vote_poll", "upload_media", "send_media", "send_location", "send_contact", "ping", "connection_status", "start_pairing", "pairing_qr"
 	To           string `json:"to,omitempty"`
 	Message      string `json:"message,omitempty"`
 	File         string `json:"file,omitempty"`
@@ -43,6 +43,10 @@ type Request struct {
 	PollQuestion   string   `json:"poll_question,omitempty"`
 	PollOptions    []string `json:"poll_options,omitempty"`
 	PollSelectable int      `json:"poll_selectable,omitempty"` // 1 = enkele keuze, 0 = onbeperkt
+
+	// for vote_poll: stem op een bestaande poll.
+	PollMsgID      string   `json:"poll_msg_id,omitempty"`
+	PollOptionNames []string `json:"poll_option_names,omitempty"` // leesbare namen (geen hashes)
 
 	// upload_media: het bestand zelf, base64. De daemon draait op een andere
 	// machine dan Whatslack (MacBook via tunnel), dus een pad werkt niet.
@@ -146,6 +150,7 @@ type PairingQRResult struct {
 type Handler interface {
 	SendText(to, message, replyToMsgID string) (msgID string, err error)
 	SendReaction(chatJID, msgID, emoji string, targetFromMe bool) error
+	VotePoll(chatJID, pollMsgID string, optionNames []string) error
 	ForwardText(to, text string) (msgID string, err error)
 	SendPoll(to, question string, options []string, selectable int) (msgID string, err error)
 	UploadMedia(data []byte, filename, mimeType string) (token, mediaType string, err error)
@@ -330,6 +335,15 @@ func (s *Server) processRequest(req Request) Response {
 			return Response{Success: false, Error: err.Error()}
 		}
 		return Response{Success: true, Data: SendTextResult{To: req.To, MsgID: msgID}}
+
+	case "vote_poll":
+		if req.ChatJID == "" || req.PollMsgID == "" {
+			return Response{Success: false, Error: "chat_jid and poll_msg_id are required"}
+		}
+		if err := s.handler.VotePoll(req.ChatJID, req.PollMsgID, req.PollOptionNames); err != nil {
+			return Response{Success: false, Error: err.Error()}
+		}
+		return Response{Success: true, Data: map[string]any{"chat_jid": req.ChatJID, "poll_msg_id": req.PollMsgID, "options": req.PollOptionNames}}
 
 	case "upload_media":
 		data, err := base64.StdEncoding.DecodeString(req.MediaData)

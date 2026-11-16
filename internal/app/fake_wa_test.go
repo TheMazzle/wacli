@@ -261,6 +261,10 @@ func (f *fakeWA) BuildPollCreation(question string, options []string, selectable
 	return &waProto.Message{PollCreationMessageV3: poll}, nil
 }
 
+func (f *fakeWA) SendPollVote(_ context.Context, _ *types.MessageInfo, _ []string) (types.MessageID, error) {
+	return "VOTE_FAKE_ID", nil
+}
+
 func (f *fakeWA) DownloadMediaToFile(ctx context.Context, directPath string, encFileHash, fileHash, mediaKey []byte, fileLength uint64, mediaType, mmsType string, targetPath string) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
 		return 0, err

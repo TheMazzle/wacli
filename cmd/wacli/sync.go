@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -260,6 +261,71 @@ func (h *syncHandler) SendPoll(to, question string, options []string, selectable
 		fmt.Fprintf(os.Stderr, "[poll] store sent poll %s: %v\n", msgID, err)
 	}
 	return string(msgID), nil
+}
+
+// VotePoll verstuurt een stem op een bestaande poll en slaat hem lokaal op.
+// optionNames mogen leeg zijn om een eerder uitgebrachte stem in te trekken.
+func (h *syncHandler) VotePoll(chatJID, pollMsgID string, optionNames []string) error {
+	if h.app == nil {
+		return fmt.Errorf("app not initialized")
+	}
+	if h.app.WA() == nil {
+		return fmt.Errorf("whatsapp client not initialized")
+	}
+	if !h.app.WA().IsConnected() {
+		return fmt.Errorf("whatsapp not connected")
+	}
+
+	chatJIDParsed, err := wa.ParseUserOrJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("parse chat JID: %w", err)
+	}
+
+	// Haal de originele poll op uit de DB om de MessageInfo te reconstrueren.
+	msg, err := h.app.DB().GetMessage(chatJID, pollMsgID)
+	if err != nil {
+		return fmt.Errorf("poll bericht %s niet gevonden: %w", pollMsgID, err)
+	}
+
+	var senderJID types.JID
+	if !msg.FromMe && msg.SenderJID != "" {
+		senderJID, err = types.ParseJID(msg.SenderJID)
+		if err != nil {
+			return fmt.Errorf("parse sender JID %q: %w", msg.SenderJID, err)
+		}
+	}
+
+	pollInfo := &types.MessageInfo{
+		MessageSource: types.MessageSource{
+			Chat:     chatJIDParsed,
+			Sender:   senderJID,
+			IsFromMe: msg.FromMe,
+		},
+		ID:        types.MessageID(pollMsgID),
+		Timestamp: msg.Timestamp,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := h.app.WA().SendPollVote(ctx, pollInfo, optionNames); err != nil {
+		return fmt.Errorf("send poll vote: %w", err)
+	}
+
+	// Leg de eigen stem direct lokaal vast zodat Whatslack hem optimistisch kan
+	// tonen. "me" als voter_jid is de conventie uit attach_polls in Whatslack.
+	hashes := make([][]byte, 0, len(optionNames))
+	for _, name := range optionNames {
+		decoded, decErr := hex.DecodeString(store.PollOptionHash(name))
+		if decErr != nil {
+			continue
+		}
+		hashes = append(hashes, decoded)
+	}
+	if err := h.app.DB().RecordPollVote(chatJID, pollMsgID, "me", hashes, time.Now().UTC().Unix()); err != nil {
+		fmt.Fprintf(os.Stderr, "[poll] store own vote %s: %v\n", pollMsgID, err)
+	}
+	return nil
 }
 
 func (h *syncHandler) MarkRead(chatJID string) error {

@@ -51,6 +51,7 @@ type WAClient interface {
 	DecryptReaction(ctx context.Context, reaction *events.Message) (*waProto.ReactionMessage, error)
 	DecryptPollVote(ctx context.Context, vote *events.Message) (*waProto.PollVoteMessage, error)
 	BuildPollCreation(question string, options []string, selectable int) (*waProto.Message, error)
+	SendPollVote(ctx context.Context, pollInfo *types.MessageInfo, optionNames []string) (types.MessageID, error)
 	RequestHistorySyncOnDemand(ctx context.Context, lastKnown types.MessageInfo, count int) (types.MessageID, error)
 	MarkRead(ctx context.Context, ids []types.MessageID, timestamp time.Time, chat types.JID, sender types.JID) error
 	ResolveLIDToPN(ctx context.Context, jid types.JID) types.JID
